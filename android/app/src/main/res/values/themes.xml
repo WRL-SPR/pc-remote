@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window colours match the Compose background so launch has no black/white flash. -->
+    <style name="Theme.PcRemote" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+    </style>
+    <color name="app_background">#F5F6FA</color>
+</resources>
