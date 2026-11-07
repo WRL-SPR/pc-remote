@@ -2,7 +2,7 @@
 ; Build: ISCC.exe PcRemoteAgent.iss  ->  ..\..\dist\PcRemoteAgent-Setup-<version>.exe
 
 #define AppName "PC 리모트 에이전트"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define DataDir "{commonappdata}\PcRemoteAgent"
 
 [Setup]
@@ -40,6 +40,7 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Tasks]
 Name: "wol"; Description: "Wake-on-LAN 설정 (빠른 시작 끄기, 유선 랜카드 '매직 패킷으로 깨우기' 켜기)"; GroupDescription: "전원 설정:"
+Name: "tray"; Description: "로그인할 때 작업 표시줄 트레이 아이콘 표시 (상태 확인, 연결 정보)"; GroupDescription: "관리:"
 Name: "desktopicon"; Description: "바탕 화면에 '연결 정보 보기' 아이콘 만들기"; GroupDescription: "바로 가기:"; Flags: unchecked
 
 [Files]
@@ -48,12 +49,16 @@ Source: "..\src\agent-common.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\agent-setup.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\agent-remove.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\show-info.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\tray.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "app.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\연결 정보 보기"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\show-info.ps1"""; \
     IconFilename: "{app}\app.ico"; Comment: "휴대폰 앱에 입력할 토큰, IP, MAC 주소 보기"
+Name: "{group}\트레이 아이콘 실행"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+    Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\tray.ps1"""; \
+    IconFilename: "{app}\app.ico"; Comment: "작업 표시줄에 에이전트 상태 아이콘 표시"
 Name: "{group}\{#AppName} 제거"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\PC 리모트 연결 정보"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\show-info.ps1"""; \
@@ -121,9 +126,15 @@ begin
       ' -Port ' + IntToStr(StrToIntDef(Trim(PortPage.Values[0]), 9876));
     if WizardIsTaskSelected('wol') then
       Params := Params + ' -SetupWol';
+    if not WizardIsTaskSelected('tray') then
+      Params := Params + ' -NoTray';
     if not Exec(PowerShellExe(), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
       MsgBox('에이전트를 설정하는 중 문제가 생겼습니다 (코드 ' + IntToStr(ResultCode) + ').' + #13#10 +
-        ExpandConstant('{#DataDir}') + '\setup.log 파일을 확인하세요.', mbError, MB_OK);
+        ExpandConstant('{#DataDir}') + '\setup.log 파일을 확인하세요.', mbError, MB_OK)
+    else if WizardIsTaskSelected('tray') then
+      { Start the tray now (elevated like the installer) instead of waiting for the next logon. }
+      Exec(PowerShellExe(), '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
+        ExpandConstant('{app}\tray.ps1') + '"', '', SW_HIDE, ewNoWait, ResultCode);
   end;
 end;
 
@@ -173,7 +184,7 @@ begin
     Msg.AutoSize := False;
     Msg.WordWrap := True;
     Msg.Height := ScaleY(36);
-    Msg.Caption := '에이전트, 부팅 시 자동 실행, 방화벽 규칙을 제거합니다. 휴대폰 앱에서 이 PC를 끄거나 절전시킬 수 없게 됩니다.';
+    Msg.Caption := '에이전트, 트레이 아이콘, 자동 실행, 방화벽 규칙을 제거합니다. 휴대폰 앱에서 이 PC를 끄거나 절전시킬 수 없게 됩니다.';
     Y := ScaleY(62);
 
     PurgeBox := TNewCheckBox.Create(Form);

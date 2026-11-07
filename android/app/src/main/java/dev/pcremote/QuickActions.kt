@@ -54,18 +54,29 @@ object QuickActions {
             return
         }
         scope.launch {
+            val activity = ActivityStore(context)
+            val via = " (루틴·빅스비·바로가기)"
             val message = try {
                 val power = action.power
                 if (power == null) {
                     WakeOnLan.send(context, pc)
+                    activity.add(pc.id, "전원 켜기 신호 보냄$via")
                     "${pc.name}에 WOL 신호를 보냈습니다"
                 } else {
                     AgentClient.command(pc, power).fold(
-                        onSuccess = { "${pc.name}: ${power.label} 명령을 보냈습니다" },
-                        onFailure = { "${pc.name}: ${it.message ?: "연결 실패"}" },
+                        onSuccess = { route ->
+                            val outside = if (route == Route.REMOTE) " (외부 연결)" else ""
+                            activity.add(pc.id, "${power.label} 명령 보냄$outside$via")
+                            "${pc.name}: ${power.label} 명령을 보냈습니다$outside"
+                        },
+                        onFailure = {
+                            activity.add(pc.id, "${power.label} 실패: ${it.message ?: "연결 실패"}$via", ok = false)
+                            "${pc.name}: ${it.message ?: "연결 실패"}"
+                        },
                     )
                 }
             } catch (e: Exception) {
+                activity.add(pc.id, "${action.label} 실패: ${e.message ?: "오류"}$via", ok = false)
                 "${pc.name}: ${e.message ?: "실패"}"
             }
             toast(context, message)

@@ -92,11 +92,37 @@ class LayoutSnapshotTest(private val screen: Screen) {
     @Test
     fun empty() = render(emptyList(), emptyMap())
 
+    /** Reached through the DDNS name while away from home (5G). */
+    @Test
+    fun outside() = render(
+        listOf(gaming.copy(wolTarget = "myhome.iptime.org", wolPort = 10009, remoteAgentPort = 19876)),
+        mapOf("1" to PcState(agent = true, stream = false, route = Route.REMOTE)),
+    )
+
+    /** One PC opened: full-screen details when narrow, list + details when wide. */
+    @Test
+    fun detail() = render(
+        pcs = listOf(gaming.copy(wolTarget = "myhome.iptime.org", wolPort = 10009, remoteAgentPort = 19876), study),
+        states = mapOf("1" to PcState(agent = true, stream = true), "3" to PcState(agent = false, stream = false)),
+        selectedId = "1",
+    )
+
+    private val now = System.currentTimeMillis()
+    private val sampleActivity = mapOf(
+        "1" to listOf(
+            Activity(now - 5 * 60_000, "절전 명령 보냄 (외부 연결)"),
+            Activity(now - 40 * 60_000, "원격 접속 가능 확인 · 1분 12초 걸림"),
+            Activity(now - 42 * 60_000, "전원 켜기 신호 보냄 (루틴·빅스비·바로가기)"),
+            Activity(now - 26 * 3_600_000L, "종료 실패: PC가 응답하지 않았습니다", ok = false),
+        ),
+    )
+
     private fun render(
         pcs: List<Pc>,
         states: Map<String, PcState>,
         busy: Map<String, String> = emptyMap(),
         dark: Boolean = false,
+        selectedId: String? = null,
     ) {
         paparazzi.snapshot {
             PcRemoteTheme(dark = dark) {
@@ -105,7 +131,10 @@ class LayoutSnapshotTest(private val screen: Screen) {
                     states = states,
                     busy = busy,
                     defaultId = "1",
+                    activities = sampleActivity,
+                    selectedId = selectedId,
                     snackbar = remember { SnackbarHostState() },
+                    onSelect = {},
                     onAdd = {},
                     onSettings = {},
                     onWake = {},

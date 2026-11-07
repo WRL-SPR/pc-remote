@@ -7,11 +7,13 @@
 
   -SetupWol  disables Fast Startup and enables "wake on magic packet" on wired adapters, saving the
              original values first so the uninstaller can put them back.
+  -NoTray    don't start the tray icon at logon.
 #>
 param(
     [Parameter(Mandatory)][string]$InstallDir,
     [int]$Port = 9876,
-    [switch]$SetupWol
+    [switch]$SetupWol,
+    [switch]$NoTray
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +47,23 @@ try {
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
         -Settings $settings -Force | Out-Null
+
+    New-Item -Path $RegKey -Force | Out-Null
+    Set-ItemProperty -Path $RegKey -Name Port -Value $Port -Type DWord
+
+    # Tray icon at every user's logon, elevated for administrators (so it can show the token).
+    # A running tray from an earlier version is closed; the installer starts the new one.
+    Stop-TrayProcess
+    Unregister-ScheduledTask -TaskName $TrayTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    if (-not $NoTray) {
+        $users = (New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-545').Translate([Security.Principal.NTAccount]).Value
+        $trayAction = New-ScheduledTaskAction -Execute 'powershell.exe' `
+            -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path $InstallDir 'tray.ps1')`""
+        $traySettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances Parallel
+        Register-ScheduledTask -TaskName $TrayTaskName -Action $trayAction -Trigger (New-ScheduledTaskTrigger -AtLogOn) `
+            -Principal (New-ScheduledTaskPrincipal -GroupId $users -RunLevel Highest) -Settings $traySettings -Force | Out-Null
+    }
 
     if ($SetupWol) {
         $wired = @(Get-NetAdapter -Physical | Where-Object MediaType -eq '802.3')

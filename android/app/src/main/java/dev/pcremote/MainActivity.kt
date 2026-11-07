@@ -3,6 +3,7 @@ package dev.pcremote
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,15 +25,16 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -120,10 +122,19 @@ fun PcRemoteApp(store: PcStore) {
     var pendingAction by remember { mutableStateOf<Pair<Pc, PowerAction>?>(null) }
     var defaultId by remember { mutableStateOf(store.defaultPc(pcs)?.id) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    val activityStore = remember { ActivityStore(context) }
+    val activities = remember {
+        mutableStateMapOf<String, List<Activity>>().apply { pcs.forEach { put(it.id, activityStore.list(it.id)) } }
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     fun notify(message: String) {
         scope.launch { snackbar.showSnackbar(message) }
+    }
+
+    fun log(pc: Pc, text: String, ok: Boolean = true) {
+        activities[pc.id] = activityStore.add(pc.id, text, ok)
     }
 
     fun openArtemis() {
@@ -137,6 +148,8 @@ fun PcRemoteApp(store: PcStore) {
                 coroutineScope {
                     pcs.forEach { pc -> launch { states[pc.id] = PcStatus.check(pc) } }
                 }
+                // Picks up entries written by Routines / Bixby actions while the app was closed.
+                pcs.forEach { activities[it.id] = activityStore.list(it.id) }
                 delay(5_000)
             }
         }
@@ -150,6 +163,7 @@ fun PcRemoteApp(store: PcStore) {
             busy[pc.id] = "WOL 신호 보내는 중…"
             try {
                 WakeOnLan.send(context, pc)
+                log(pc, "전원 켜기 신호 보냄")
                 val start = System.currentTimeMillis()
                 var lastSend = start
                 while (true) {
@@ -159,13 +173,13 @@ fun PcRemoteApp(store: PcStore) {
                     val sec = (now - start) / 1000
                     if (state.stream) {
                         notify("${pc.name}이(가) 켜졌습니다. 원격 접속할 수 있습니다")
+                        log(pc, "원격 접속 가능 확인 · ${formatDuration(sec)} 걸림")
                         break
                     }
                     if (sec > 180) {
-                        notify(
-                            if (state.agent) "${pc.name}은(는) 켜졌지만 Apollo가 응답하지 않습니다"
-                            else "${pc.name}이(가) 3분 안에 켜지지 않았습니다"
-                        )
+                        val message = if (state.agent) "켜졌지만 Apollo가 응답하지 않음" else "3분 안에 켜지지 않음"
+                        notify("${pc.name}: $message")
+                        log(pc, message, ok = false)
                         break
                     }
                     busy[pc.id] = if (state.agent) "윈도우 켜짐 · Apollo 대기 ${sec}초" else "켜는 중… ${sec}초"
@@ -177,6 +191,7 @@ fun PcRemoteApp(store: PcStore) {
                 }
             } catch (e: Exception) {
                 notify(e.message ?: "WOL 전송 실패")
+                log(pc, "켜기 실패: ${e.message ?: "WOL 전송 실패"}", ok = false)
             } finally {
                 busy.remove(pc.id)
             }
@@ -187,8 +202,15 @@ fun PcRemoteApp(store: PcStore) {
         scope.launch {
             busy[pc.id] = "${action.label} 명령 보내는 중…"
             AgentClient.command(pc, action)
-                .onSuccess { notify("${pc.name}: ${action.label} 명령을 보냈습니다") }
-                .onFailure { notify("${pc.name}: ${it.message ?: "연결 실패"}") }
+                .onSuccess { route ->
+                    val outside = if (route == Route.REMOTE) " (외부 연결)" else ""
+                    notify("${pc.name}: ${action.label} 명령을 보냈습니다$outside")
+                    log(pc, "${action.label} 명령 보냄$outside")
+                }
+                .onFailure {
+                    notify("${pc.name}: ${it.message ?: "연결 실패"}")
+                    log(pc, "${action.label} 실패: ${it.message ?: "연결 실패"}", ok = false)
+                }
             busy.remove(pc.id)
         }
     }
@@ -198,7 +220,10 @@ fun PcRemoteApp(store: PcStore) {
         states = states,
         busy = busy,
         defaultId = defaultId,
+        activities = activities,
+        selectedId = selectedId,
         snackbar = snackbar,
+        onSelect = { selectedId = it },
         onAdd = { editorTarget = null; editorOpen = true },
         onSettings = { settingsOpen = true },
         onWake = { wake(it) },
@@ -222,6 +247,9 @@ fun PcRemoteApp(store: PcStore) {
             onDelete = { pc ->
                 pcs = pcs.filter { it.id != pc.id }
                 store.save(pcs)
+                activityStore.clear(pc.id)
+                activities.remove(pc.id)
+                if (selectedId == pc.id) selectedId = null
                 defaultId = store.defaultPc(pcs)?.id
                 editorOpen = false
             },
@@ -263,7 +291,12 @@ fun PcRemoteApp(store: PcStore) {
     }
 }
 
-/** Stateless main screen, also rendered by the layout snapshot tests. */
+/**
+ * Stateless main screen, also rendered by the layout snapshot tests.
+ *   wide (>= 580dp: Fold inner screen, phones in landscape): PC list on the left, details on the right
+ *   narrow (Fold cover, bar phones): PC cards; tapping one opens its details full screen
+ * The layout follows the actual window width, so it also adapts to pop-up / split view.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PcRemoteScreen(
@@ -271,7 +304,10 @@ fun PcRemoteScreen(
     states: Map<String, PcState>,
     busy: Map<String, String>,
     defaultId: String?,
+    activities: Map<String, List<Activity>>,
+    selectedId: String?,
     snackbar: SnackbarHostState,
+    onSelect: (String?) -> Unit,
     onAdd: () -> Unit,
     onSettings: () -> Unit,
     onWake: (Pc) -> Unit,
@@ -279,86 +315,170 @@ fun PcRemoteScreen(
     onPower: (Pc, PowerAction) -> Unit,
     onEdit: (Pc) -> Unit,
 ) {
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("PC 리모트", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        if (pcs.isNotEmpty()) {
-                            val onCount = pcs.count { states[it.id]?.on == true }
-                            Text(
-                                "${pcs.size}대 중 ${onCount}대 켜짐",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val wide = maxWidth >= 580.dp && pcs.isNotEmpty()
+        val selected = pcs.firstOrNull { it.id == selectedId }
+        // Narrow screen showing one PC's details. Survives folding: the same selection opens the
+        // two-pane view when unfolded and the full-screen details when folded.
+        val detailOnly = !wide && selected != null
+        val shown = selected ?: pcs.firstOrNull { it.id == defaultId } ?: pcs.firstOrNull()
+        val listWidth = if (maxWidth < 700.dp) 240.dp else 280.dp
+        // With a single PC the list would be mostly empty, so its details take the whole width.
+        val showList = wide && pcs.size > 1
+        val side = if (maxWidth < 360.dp) 12.dp else 16.dp
+
+        if (detailOnly && LocalOnBackPressedDispatcherOwner.current != null) {
+            BackHandler { onSelect(null) }
+        }
+
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            topBar = {
+                val barColors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                    scrolledContainerColor = MaterialTheme.colorScheme.background,
+                )
+                if (detailOnly) {
+                    TopAppBar(
+                        title = { Text(selected!!.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        navigationIcon = {
+                            IconButton(onClick = { onSelect(null) }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로")
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = { onEdit(selected!!) }) {
+                                Icon(Icons.Outlined.Edit, contentDescription = "편집", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        },
+                        colors = barColors,
+                    )
+                } else {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text("PC 리모트", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                if (pcs.isNotEmpty()) {
+                                    val onCount = pcs.count { states[it.id]?.on == true }
+                                    Text(
+                                        "${pcs.size}대 중 ${onCount}대 켜짐",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                        },
+                        actions = {
+                            IconButton(onClick = onSettings) {
+                                Icon(
+                                    Icons.Outlined.Settings,
+                                    contentDescription = "빅스비 · 루틴 연동",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        colors = barColors,
+                    )
+                }
+            },
+            floatingActionButton = {
+                if (pcs.isNotEmpty() && !showList && !detailOnly) {
+                    ExtendedFloatingActionButton(
+                        onClick = onAdd,
+                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        text = { Text("PC 추가") },
+                        shape = RoundedCornerShape(18.dp),
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            },
+            snackbarHost = { SnackbarHost(snackbar) },
+            // safeDrawing also keeps content clear of the camera cutout in landscape.
+            contentWindowInsets = WindowInsets.safeDrawing,
+        ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+                when {
+                    pcs.isEmpty() -> EmptyState(onAdd, Modifier.fillMaxSize().padding(side))
+
+                    wide && !showList -> PcDetailPane(
+                        pc = shown!!,
+                        state = states[shown.id],
+                        busy = busy[shown.id],
+                        isDefault = true,
+                        showDefaultBadge = false,
+                        activities = activities[shown.id].orEmpty(),
+                        showEdit = true,
+                        onWake = { onWake(shown) },
+                        onStream = onStream,
+                        onPower = { onPower(shown, it) },
+                        onEdit = { onEdit(shown) },
+                        modifier = Modifier.fillMaxSize(),
+                        bottomPadding = 96.dp,   // clear of the "PC 추가" button
+                    )
+
+                    wide -> Row(Modifier.fillMaxSize()) {
+                        PcListPane(
+                            pcs = pcs,
+                            states = states,
+                            busy = busy,
+                            selectedId = shown!!.id,
+                            defaultId = defaultId,
+                            onSelect = { onSelect(it.id) },
+                            onAdd = onAdd,
+                            modifier = Modifier.width(listWidth).fillMaxHeight(),
+                        )
+                        PcDetailPane(
+                            pc = shown,
+                            state = states[shown.id],
+                            busy = busy[shown.id],
+                            isDefault = shown.id == defaultId,
+                            showDefaultBadge = pcs.size > 1,
+                            activities = activities[shown.id].orEmpty(),
+                            showEdit = true,
+                            onWake = { onWake(shown) },
+                            onStream = onStream,
+                            onPower = { onPower(shown, it) },
+                            onEdit = { onEdit(shown) },
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        )
+                    }
+
+                    detailOnly -> PcDetailPane(
+                        pc = selected!!,
+                        state = states[selected.id],
+                        busy = busy[selected.id],
+                        isDefault = selected.id == defaultId,
+                        showDefaultBadge = pcs.size > 1,
+                        activities = activities[selected.id].orEmpty(),
+                        showEdit = false,
+                        onWake = { onWake(selected) },
+                        onStream = onStream,
+                        onPower = { onPower(selected, it) },
+                        onEdit = { onEdit(selected) },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    else -> LazyColumn(
+                        // Capped so cards don't stretch on wide-but-short windows (split view).
+                        modifier = Modifier.widthIn(max = 640.dp).fillMaxSize(),
+                        contentPadding = PaddingValues(start = side, end = side, top = 8.dp, bottom = 96.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        items(pcs, key = { it.id }) { pc ->
+                            PcCard(
+                                pc = pc,
+                                state = states[pc.id],
+                                busy = busy[pc.id],
+                                isDefault = pcs.size > 1 && pc.id == defaultId,
+                                onOpen = { onSelect(pc.id) },
+                                onWake = { onWake(pc) },
+                                onStream = onStream,
+                                onPower = { onPower(pc, it) },
+                                onEdit = { onEdit(pc) },
                             )
                         }
                     }
-                },
-                actions = {
-                    IconButton(onClick = onSettings) {
-                        Icon(
-                            Icons.Outlined.Settings,
-                            contentDescription = "빅스비 · 루틴 연동",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    scrolledContainerColor = MaterialTheme.colorScheme.background,
-                ),
-            )
-        },
-        floatingActionButton = {
-            if (pcs.isNotEmpty()) {
-                ExtendedFloatingActionButton(
-                    onClick = onAdd,
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text("PC 추가") },
-                    shape = RoundedCornerShape(18.dp),
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        },
-        snackbarHost = { SnackbarHost(snackbar) },
-        // safeDrawing also keeps cards clear of the camera cutout in landscape.
-        contentWindowInsets = WindowInsets.safeDrawing,
-    ) { padding ->
-        // Layout follows the actual window width, so it also adapts to pop-up / split view:
-        //   < 360dp  Fold cover screen, small phones
-        //   < 580dp  regular phones, newer Fold cover screens
-        //   >= 580dp Fold inner screen (Fold 1: 586dp ~ Fold 7/8: 750dp), phones in landscape
-        //            -> grid when there are several PCs
-        BoxWithConstraints(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            val side = if (maxWidth < 360.dp) 12.dp else 16.dp
-            val grid = maxWidth >= 580.dp && pcs.size > 1
-            if (pcs.isEmpty()) {
-                EmptyState(onAdd, Modifier.fillMaxSize().padding(side))
-            } else LazyVerticalGrid(
-                // 270dp keeps two columns even on the original Fold's 586dp inner screen.
-                columns = if (grid) GridCells.Adaptive(270.dp) else GridCells.Fixed(1),
-                // A single column is capped so cards don't stretch across the unfolded screen.
-                modifier = Modifier.fillMaxHeight().then(
-                    if (grid) Modifier.fillMaxWidth() else Modifier.widthIn(max = 640.dp).fillMaxWidth()
-                ),
-                contentPadding = PaddingValues(start = side, end = side, top = 8.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                items(pcs, key = { it.id }) { pc ->
-                    PcCard(
-                        pc = pc,
-                        state = states[pc.id],
-                        busy = busy[pc.id],
-                        isDefault = pcs.size > 1 && pc.id == defaultId,
-                        onWake = { onWake(pc) },
-                        onStream = onStream,
-                        onPower = { onPower(pc, it) },
-                        onEdit = { onEdit(pc) },
-                    )
                 }
             }
         }
@@ -405,35 +525,21 @@ private fun EmptyState(onAdd: () -> Unit, modifier: Modifier) {
     }
 }
 
-private val CompactButtonPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-private val ActionShape = RoundedCornerShape(16.dp)
-
 @Composable
 fun PcCard(
     pc: Pc,
     state: PcState?,
     busy: String?,
     isDefault: Boolean,
+    onOpen: () -> Unit,
     onWake: () -> Unit,
     onStream: () -> Unit,
     onPower: (PowerAction) -> Unit,
     onEdit: () -> Unit,
 ) {
-    val streamReady = state?.stream == true
-    val agentOn = state?.agent == true
-    val statusColor = when {
-        streamReady -> StatusColors.ready
-        busy != null || agentOn -> StatusColors.waiting
-        else -> StatusColors.off
-    }
-    val statusText = busy ?: when {
-        state == null -> "확인 중…"
-        streamReady -> "원격 접속 가능"
-        agentOn -> "윈도우 켜짐 · Apollo 응답 없음"
-        else -> "꺼짐"
-    }
-
+    val ui = statusUi(pc, state, busy)
     ElevatedCard(
+        onClick = onOpen,
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
@@ -445,10 +551,10 @@ fun PcCard(
             Column(Modifier.padding(pad), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        Modifier.size(46.dp).background(statusColor.copy(alpha = 0.14f), RoundedCornerShape(15.dp)),
+                        Modifier.size(46.dp).background(ui.color.copy(alpha = 0.14f), RoundedCornerShape(15.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(AppIcons.Desktop, contentDescription = null, modifier = Modifier.size(24.dp), tint = statusColor)
+                        Icon(AppIcons.Desktop, contentDescription = null, modifier = Modifier.size(24.dp), tint = ui.color)
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
@@ -463,21 +569,16 @@ fun PcCard(
                             )
                             if (isDefault) {
                                 Spacer(Modifier.width(6.dp))
-                                Text(
-                                    "기본",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier
-                                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
-                                        .padding(horizontal = 6.dp, vertical = 1.dp),
-                                )
+                                DefaultBadge()
                             }
                         }
                         Text(
-                            pc.host,
+                            ui.address,
                             style = MaterialTheme.typography.labelMedium,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                     IconButton(onClick = onEdit) {
@@ -489,82 +590,23 @@ fun PcCard(
                     }
                 }
 
-                StatusPill(statusText, statusColor)
-                if (busy != null) {
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)),
-                        color = statusColor,
-                        trackColor = statusColor.copy(alpha = 0.15f),
-                    )
-                }
-
-                // Show only what can be used now: power-on while off, power commands while Windows runs.
-                val off = state?.on != true && busy == null
-                val wakeButton: @Composable (Modifier) -> Unit = { m ->
-                    Button(onClick = onWake, modifier = m.height(48.dp), shape = ActionShape, contentPadding = CompactButtonPadding) {
-                        Icon(AppIcons.Power, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("전원 켜기", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
-                // Only enabled once Apollo answers, i.e. the PC is fully up and streamable.
-                val streamButton: @Composable (Modifier) -> Unit = { m ->
-                    Button(
-                        onClick = onStream,
-                        enabled = streamReady,
-                        modifier = m.height(48.dp),
-                        shape = ActionShape,
-                        contentPadding = CompactButtonPadding,
-                        colors = ButtonDefaults.buttonColors(
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        ),
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (streamReady) "Artemis 접속" else "Artemis",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            fontWeight = if (streamReady) FontWeight.SemiBold else null,
-                        )
-                    }
-                }
-                when {
-                    !off -> streamButton(Modifier.fillMaxWidth())
-                    inner >= 220.dp -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        wakeButton(Modifier.weight(1f))
-                        streamButton(Modifier.weight(1f))
-                    }
-                    else -> {
-                        wakeButton(Modifier.fillMaxWidth())
-                        streamButton(Modifier.fillMaxWidth())
-                    }
-                }
-
-                // Power tiles: a row of 4 (icon over label) on wide cards, 2 x 2 (icon beside label) otherwise.
-                if (agentOn) {
-                    val wide = inner >= 340.dp
-                    PowerAction.entries.chunked(if (wide) 4 else 2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            row.forEach { action ->
-                                PowerTile(
-                                    action = action,
-                                    stacked = wide,
-                                    enabled = busy == null,
-                                    modifier = Modifier.weight(1f),
-                                    onClick = { onPower(action) },
-                                )
-                            }
-                        }
-                    }
-                }
+                StatusPill(ui.text, ui.color)
+                BusyBar(busy, ui.color)
+                PcActionButtons(state, busy, inner, large = false, onWake = onWake, onStream = onStream)
+                PowerTiles(state, busy, inner, onPower)
+                Text(
+                    "연결 정보 · 최근 활동 ›",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.align(Alignment.End),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun StatusPill(text: String, color: Color) {
+fun StatusPill(text: String, color: Color) {
     Row(
         Modifier
             .background(color.copy(alpha = 0.12f), RoundedCornerShape(50))
@@ -584,7 +626,7 @@ private fun StatusPill(text: String, color: Color) {
 }
 
 @Composable
-private fun PowerTile(
+fun PowerTile(
     action: PowerAction,
     stacked: Boolean,
     enabled: Boolean,
@@ -639,6 +681,9 @@ fun PcEditorDialog(
     var agentPort by remember { mutableStateOf((initial?.agentPort ?: 9876).toString()) }
     var wolTarget by remember { mutableStateOf(initial?.wolTarget ?: "") }
     var wolPort by remember { mutableStateOf((initial?.wolPort ?: 9).toString()) }
+    var remoteAgentPort by remember {
+        mutableStateOf(initial?.remoteAgentPort?.takeIf { it > 0 }?.toString() ?: "")
+    }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
@@ -655,14 +700,22 @@ fun PcEditorDialog(
                 Field("PC IP 주소", host, "예: 192.168.0.10 (공유기에서 고정 IP 권장)", KeyboardType.Uri) { host = it }
                 Field("MAC 주소", mac, "예: 1C:69:7A:12:34:56") { mac = it }
                 Section("PC 에이전트")
-                Field("토큰", token, "install.ps1 실행 시 출력된 값") { token = it }
+                Field("토큰", token, "PC의 '연결 정보 보기'에 나오는 값") { token = it }
                 Field("포트", agentPort, keyboard = KeyboardType.Number) { agentPort = it }
-                Section("밖에서 켜기 (선택)")
+                Section("집 밖에서 사용 (선택)")
                 Field(
-                    "외부 WOL 주소", wolTarget,
-                    "ipTIME DDNS 주소 (예: myhome.iptime.org)", KeyboardType.Uri,
+                    "DDNS 주소", wolTarget,
+                    "포트 없이 주소만 (예: myhome.iptime.org)", KeyboardType.Uri,
                 ) { wolTarget = it }
-                Field("WOL 포트", wolPort, "공유기에서 포워딩한 UDP 포트", KeyboardType.Number) { wolPort = it }
+                Field(
+                    "WOL 외부 포트", wolPort,
+                    "공유기 포트포워딩: UDP 이 포트 → PC 내부 9", KeyboardType.Number,
+                ) { wolPort = it }
+                Field(
+                    "에이전트 외부 포트", remoteAgentPort,
+                    "공유기 포트포워딩: TCP 이 포트 → PC 내부 ${agentPort.trim().ifEmpty { "9876" }} · 비우면 사용 안 함",
+                    KeyboardType.Number,
+                ) { remoteAgentPort = it }
                 Section("빅스비 · 루틴")
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { makeDefault = !makeDefault },
@@ -683,12 +736,16 @@ fun PcEditorDialog(
             TextButton(onClick = {
                 val ap = agentPort.trim().toIntOrNull()
                 val wp = wolPort.trim().toIntOrNull()
+                val rp = if (remoteAgentPort.isBlank()) 0 else remoteAgentPort.trim().toIntOrNull()
                 errorMsg = when {
                     name.isBlank() -> "이름을 입력하세요"
                     host.isBlank() -> "PC IP 주소를 입력하세요"
                     runCatching { WakeOnLan.parseMac(mac) }.isFailure -> "MAC 주소 형식이 올바르지 않습니다"
                     ap == null || ap !in 1..65535 -> "에이전트 포트가 올바르지 않습니다"
-                    wp == null || wp !in 1..65535 -> "WOL 포트가 올바르지 않습니다"
+                    ':' in wolTarget || '/' in wolTarget -> "DDNS 주소에는 포트나 http:// 없이 주소만 입력하세요"
+                    wp == null || wp !in 1..65535 -> "WOL 외부 포트가 올바르지 않습니다"
+                    rp == null || rp !in 0..65535 -> "에이전트 외부 포트가 올바르지 않습니다"
+                    rp > 0 && wolTarget.isBlank() -> "에이전트 외부 포트를 쓰려면 DDNS 주소를 입력하세요"
                     else -> null
                 }
                 if (errorMsg == null) {
@@ -702,6 +759,7 @@ fun PcEditorDialog(
                             agentPort = ap!!,
                             wolTarget = wolTarget.trim(),
                             wolPort = wp!!,
+                            remoteAgentPort = rp!!,
                         ),
                         makeDefault,
                     )

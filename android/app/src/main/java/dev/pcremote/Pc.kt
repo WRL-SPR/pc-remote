@@ -13,10 +13,17 @@ data class Pc(
     val mac: String,
     val token: String,
     val agentPort: Int = 9876,
-    /** Extra WOL target, e.g. an ipTIME DDNS name (xxx.iptime.org) for waking from outside. */
+    /** DDNS name (e.g. xxx.iptime.org) used from outside home: WOL target and agent fallback. */
     val wolTarget: String = "",
+    /** External UDP port the router forwards to the PC for WOL. */
     val wolPort: Int = 9,
-)
+    /** External TCP port the router forwards to the agent; 0 = not used. */
+    val remoteAgentPort: Int = 0,
+) {
+    /** DDNS host for reaching the agent from outside, if configured. */
+    val remoteHost: String?
+        get() = wolTarget.trim().takeIf { it.isNotEmpty() && remoteAgentPort in 1..65535 }
+}
 
 class PcStore(context: Context) {
     private val prefs = context.getSharedPreferences("pcs", Context.MODE_PRIVATE)
@@ -46,6 +53,7 @@ class PcStore(context: Context) {
         .put("agentPort", agentPort)
         .put("wolTarget", wolTarget)
         .put("wolPort", wolPort)
+        .put("remoteAgentPort", remoteAgentPort)
 
     private fun JSONObject.toPc() = Pc(
         id = getString("id"),
@@ -56,5 +64,6 @@ class PcStore(context: Context) {
         agentPort = optInt("agentPort", 9876),
         wolTarget = optString("wolTarget"),
         wolPort = optInt("wolPort", 9),
+        remoteAgentPort = optInt("remoteAgentPort", 0),
     )
 }

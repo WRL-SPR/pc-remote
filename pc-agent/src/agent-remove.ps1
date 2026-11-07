@@ -1,6 +1,6 @@
 <#
   Run by the uninstaller (elevated) before the program files are deleted.
-    always         stops the agent, removes the boot task and the firewall rule
+    always         stops the agent and tray icon, removes their tasks, the firewall rule and registry key
     -RestorePower  puts back the Fast Startup / wake-on-magic-packet values saved by -SetupWol
     -PurgeData     deletes C:\ProgramData\PcRemoteAgent (config, token, logs)
 #>
@@ -12,8 +12,11 @@ param(
 . (Join-Path $PSScriptRoot 'agent-common.ps1')
 
 Stop-AgentProcess
+Stop-TrayProcess
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName $TrayTaskName -Confirm:$false -ErrorAction SilentlyContinue
 Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+Remove-Item -Path $RegKey -Recurse -Force -ErrorAction SilentlyContinue
 
 if ($RestorePower -and (Test-Path $WolStatePath)) {
     $state = Get-Content -LiteralPath $WolStatePath -Raw | ConvertFrom-Json
