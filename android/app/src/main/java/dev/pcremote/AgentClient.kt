@@ -16,11 +16,11 @@ import java.security.SecureRandom
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
-enum class PowerAction(val path: String, val label: String) {
-    SLEEP("sleep", "절전"),
-    HIBERNATE("hibernate", "최대 절전"),
-    RESTART("restart", "재시작"),
-    SHUTDOWN("shutdown", "종료"),
+enum class PowerAction(val path: String, val label: String, val turnsOff: Boolean) {
+    SLEEP("sleep", "절전", true),
+    HIBERNATE("hibernate", "최대 절전", true),
+    RESTART("restart", "재시작", false),
+    SHUTDOWN("shutdown", "종료", true),
 }
 
 /** How the PC was reached: its LAN address at home, or the DDNS name through router forwarding. */

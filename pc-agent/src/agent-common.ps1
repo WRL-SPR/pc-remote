@@ -10,6 +10,9 @@ $AgentConfigPath = Join-Path $DataDir 'agent-config.json'
 # Original power settings, saved before -SetupWol changes them, so uninstall can restore them.
 $WolStatePath = Join-Path $DataDir 'wol-state.json'
 $PowerKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power'
+# NIC advanced settings (registry keywords, so they work in any Windows language) that -SetupWol
+# turns off: pattern wake, and Realtek power saving that can stop the NIC hearing the magic packet.
+$NicAdvancedKeys = '*WakeOnPattern', 'PowerSavingMode', 'EnableGreenEthernet'
 
 function New-AgentToken {
     $chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'.ToCharArray()

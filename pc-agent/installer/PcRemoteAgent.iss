@@ -2,7 +2,7 @@
 ; Build: ISCC.exe PcRemoteAgent.iss  ->  ..\..\dist\PcRemoteAgent-Setup-<version>.exe
 
 #define AppName "PC 리모트 에이전트"
-#define AppVersion "1.1.1"
+#define AppVersion "1.1.2"
 #define DataDir "{commonappdata}\PcRemoteAgent"
 
 [Setup]
@@ -39,7 +39,7 @@ VersionInfoVersion={#AppVersion}
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Tasks]
-Name: "wol"; Description: "Wake-on-LAN 설정 (빠른 시작 끄기, 유선 랜카드 '매직 패킷으로 깨우기' 켜기)"; GroupDescription: "전원 설정:"
+Name: "wol"; Description: "Wake-on-LAN 설정 (빠른 시작 끄기, 유선 랜카드: 매직 패킷으로만 깨우기, 랜카드 절전 끄기)"; GroupDescription: "전원 설정:"
 Name: "tray"; Description: "로그인할 때 작업 표시줄 트레이 아이콘 표시 (상태 확인, 연결 정보)"; GroupDescription: "관리:"
 Name: "desktopicon"; Description: "바탕 화면에 '연결 정보 보기' 아이콘 만들기"; GroupDescription: "바로 가기:"; Flags: unchecked
 
@@ -207,7 +207,7 @@ begin
     RestoreBox.Checked := HasWolState;
     RestoreBox.Enabled := HasWolState;
     if HasWolState then
-      AddNote(Form, Y + ScaleY(22), '빠른 시작과 랜카드의 매직 패킷 깨우기 설정을 설치 전 상태로 되돌립니다. 되돌리면 꺼진 상태에서 WOL이 안 될 수 있습니다.')
+      AddNote(Form, Y + ScaleY(22), '빠른 시작과 랜카드의 깨우기·절전 설정을 설치 전 상태로 되돌립니다. 되돌리면 WOL이 잘 안 되거나 절전 중 저절로 켜질 수 있습니다.')
     else
       AddNote(Form, Y + ScaleY(22), '설치할 때 Wake-on-LAN 설정을 선택하지 않아 되돌릴 설정이 없습니다.');
     Y := Y + ScaleY(70);

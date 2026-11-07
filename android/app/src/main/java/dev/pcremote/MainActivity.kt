@@ -145,8 +145,13 @@ fun PcRemoteApp(store: PcStore) {
     LaunchedEffect(pcs, lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
+                val now = System.currentTimeMillis()
                 coroutineScope {
-                    pcs.forEach { pc -> launch { states[pc.id] = PcStatus.check(pc) } }
+                    pcs.forEach { pc ->
+                        // Leave a PC alone right after it was told to sleep / shut down.
+                        if (now < store.quietUntil(pc.id)) states[pc.id] = PcState(agent = false, stream = false)
+                        else launch { states[pc.id] = PcStatus.check(pc) }
+                    }
                 }
                 // Picks up entries written by Routines / Bixby actions while the app was closed.
                 pcs.forEach { activities[it.id] = activityStore.list(it.id) }
@@ -161,6 +166,7 @@ fun PcRemoteApp(store: PcStore) {
         if (busy.containsKey(pc.id)) return
         scope.launch {
             busy[pc.id] = "WOL 신호 보내는 중…"
+            store.setQuiet(pc.id, 0)
             try {
                 WakeOnLan.send(context, pc)
                 log(pc, "전원 켜기 신호 보냄")
@@ -203,6 +209,10 @@ fun PcRemoteApp(store: PcStore) {
             busy[pc.id] = "${action.label} 명령 보내는 중…"
             AgentClient.command(pc, action)
                 .onSuccess { route ->
+                    if (action.turnsOff) {
+                        store.setQuiet(pc.id, System.currentTimeMillis() + PcStore.QUIET_AFTER_POWER_OFF_MS)
+                        states[pc.id] = PcState(agent = false, stream = false)
+                    }
                     val outside = if (route == Route.REMOTE) " (외부 연결)" else ""
                     notify("${pc.name}: ${action.label} 명령을 보냈습니다$outside")
                     log(pc, "${action.label} 명령 보냄$outside")

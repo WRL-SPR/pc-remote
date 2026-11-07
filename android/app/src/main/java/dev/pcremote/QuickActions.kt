@@ -59,12 +59,14 @@ object QuickActions {
             val message = try {
                 val power = action.power
                 if (power == null) {
+                    store.setQuiet(pc.id, 0)
                     WakeOnLan.send(context, pc)
                     activity.add(pc.id, "전원 켜기 신호 보냄$via")
                     "${pc.name}에 WOL 신호를 보냈습니다"
                 } else {
                     AgentClient.command(pc, power).fold(
                         onSuccess = { route ->
+                            if (power.turnsOff) store.setQuiet(pc.id, System.currentTimeMillis() + PcStore.QUIET_AFTER_POWER_OFF_MS)
                             val outside = if (route == Route.REMOTE) " (외부 연결)" else ""
                             activity.add(pc.id, "${power.label} 명령 보냄$outside$via")
                             "${pc.name}: ${power.label} 명령을 보냈습니다$outside"

@@ -5,8 +5,9 @@
     - opens the port in Windows Firewall for Private networks
     - registers the boot-time SYSTEM task that runs PcAgent.ps1 from the install folder
 
-  -SetupWol  disables Fast Startup and enables "wake on magic packet" on wired adapters, saving the
-             original values first so the uninstaller can put them back.
+  -SetupWol  disables Fast Startup; on wired adapters enables "wake on magic packet", disables
+             pattern wake and NIC power saving (Realtek Power Saving Mode / Green Ethernet). The
+             original values are saved first so the uninstaller can put them back.
   -NoTray    don't start the tray icon at logon.
 #>
 param(
@@ -67,27 +68,64 @@ try {
 
     if ($SetupWol) {
         $wired = @(Get-NetAdapter -Physical | Where-Object MediaType -eq '802.3')
-        # Record the originals only once, so a reinstall doesn't overwrite them with our own values.
-        if (-not (Test-Path $WolStatePath)) {
-            $hiberboot = (Get-ItemProperty -Path $PowerKey -Name HiberbootEnabled -ErrorAction SilentlyContinue).HiberbootEnabled
-            $adapters = @($wired | ForEach-Object {
-                $pm = Get-NetAdapterPowerManagement -Name $_.Name -ErrorAction SilentlyContinue
-                if ($pm) { @{ name = $_.Name; wakeOnMagicPacket = [string]$pm.WakeOnMagicPacket } }
+
+        # Record the originals once per setting: a reinstall must not overwrite them with our own
+        # values, but settings added in later versions are still recorded the first time.
+        $state = if (Test-Path $WolStatePath) { Get-Content -LiteralPath $WolStatePath -Raw | ConvertFrom-Json } else { $null }
+        $hiberboot = if ($state) { $state.hiberbootEnabled }
+                     else { (Get-ItemProperty -Path $PowerKey -Name HiberbootEnabled -ErrorAction SilentlyContinue).HiberbootEnabled }
+        $saved = @{}
+        foreach ($a in @($state.adapters)) { if ($a) { $saved[$a.name] = $a } }
+
+        $adapters = @(foreach ($nic in $wired) {
+            $old = $saved[$nic.Name]
+            $pm = Get-NetAdapterPowerManagement -Name $nic.Name -ErrorAction SilentlyContinue
+            $advanced = @(foreach ($kw in $NicAdvancedKeys) {
+                $prev = if ($old) { @($old.advanced) | Where-Object { $_ -and $_.keyword -eq $kw } | Select-Object -First 1 }
+                if ($prev) {
+                    @{ keyword = $kw; value = [string]$prev.value }
+                } else {
+                    $p = Get-NetAdapterAdvancedProperty -Name $nic.Name -RegistryKeyword $kw -ErrorAction SilentlyContinue
+                    if ($p) { @{ keyword = $kw; value = [string]@($p.RegistryValue)[0] } }
+                }
             })
-            @{ hiberbootEnabled = $hiberboot; adapters = $adapters } |
-                ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $WolStatePath -Encoding UTF8
-        }
+            @{
+                name              = $nic.Name
+                wakeOnMagicPacket = if ($old -and $old.wakeOnMagicPacket) { [string]$old.wakeOnMagicPacket } elseif ($pm) { [string]$pm.WakeOnMagicPacket } else { $null }
+                wakeOnPattern     = if ($old -and $old.PSObject.Properties['wakeOnPattern']) { [string]$old.wakeOnPattern } elseif ($pm) { [string]$pm.WakeOnPattern } else { $null }
+                advanced          = $advanced
+            }
+        })
+        @{ hiberbootEnabled = $hiberboot; adapters = $adapters } |
+            ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $WolStatePath -Encoding UTF8
 
         Set-ItemProperty -Path $PowerKey -Name HiberbootEnabled -Value 0 -Type DWord
         Write-Host 'Fast Startup disabled.'
         foreach ($nic in $wired) {
             try {
-                Set-NetAdapterPowerManagement -Name $nic.Name -WakeOnMagicPacket Enabled -ErrorAction Stop
+                # Magic packet only: pattern wake would also wake the PC on ordinary traffic,
+                # such as the phone app's status checks right after a sleep command.
+                Set-NetAdapterPowerManagement -Name $nic.Name -WakeOnMagicPacket Enabled -WakeOnPattern Disabled -ErrorAction Stop
                 powercfg /deviceenablewake "$($nic.InterfaceDescription)" 2>$null | Out-Null
-                Write-Host "Wake on magic packet enabled: $($nic.Name)"
+                Write-Host "Wake on magic packet only: $($nic.Name)"
             } catch {
-                Write-Warning "Could not change '$($nic.Name)': $_"
+                Write-Warning "Could not change wake settings of '$($nic.Name)': $_"
             }
+            $changed = $false
+            foreach ($kw in $NicAdvancedKeys) {
+                $p = Get-NetAdapterAdvancedProperty -Name $nic.Name -RegistryKeyword $kw -ErrorAction SilentlyContinue
+                if ($p -and [string]@($p.RegistryValue)[0] -ne '0') {
+                    try {
+                        Set-NetAdapterAdvancedProperty -Name $nic.Name -RegistryKeyword $kw -RegistryValue 0 -NoRestart -ErrorAction Stop
+                        $changed = $true
+                        Write-Host "$kw off: $($nic.Name)"
+                    } catch {
+                        Write-Warning "Could not change $kw on '$($nic.Name)': $_"
+                    }
+                }
+            }
+            # Advanced settings take effect when the adapter restarts (a few seconds offline).
+            if ($changed) { Restart-NetAdapter -Name $nic.Name -Confirm:$false -ErrorAction SilentlyContinue }
         }
     }
 

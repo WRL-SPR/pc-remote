@@ -44,6 +44,21 @@ class PcStore(context: Context) {
 
     fun defaultPc(list: List<Pc> = load()): Pc? = list.firstOrNull { it.id == defaultId } ?: list.firstOrNull()
 
+    /**
+     * After a sleep / hibernate / shutdown command the app stops checking that PC for a while,
+     * so its status checks can't wake a PC whose network card still reacts to ordinary traffic.
+     * Shared with Routines / Bixby actions, which run outside the app.
+     */
+    fun quietUntil(pcId: String): Long = prefs.getLong("quiet_$pcId", 0)
+
+    fun setQuiet(pcId: String, untilMillis: Long) {
+        prefs.edit().putLong("quiet_$pcId", untilMillis).apply()
+    }
+
+    companion object {
+        const val QUIET_AFTER_POWER_OFF_MS = 90_000L
+    }
+
     private fun Pc.toJson() = JSONObject()
         .put("id", id)
         .put("name", name)
