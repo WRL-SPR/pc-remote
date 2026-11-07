@@ -60,9 +60,9 @@ object QuickActions {
                 val power = action.power
                 if (power == null) {
                     store.setQuiet(pc.id, 0)
-                    val note = WakeOnLan.send(context, pc)
-                    val suffix = note?.let { " ($it)" } ?: ""
-                    activity.add(pc.id, "전원 켜기 신호 보냄$suffix$via", ok = note == null)
+                    val report = WakeOnLan.wake(context, pc)
+                    val suffix = report.note?.let { " ($it)" } ?: ""
+                    activity.add(pc.id, "전원 켜기 신호 보냄$suffix$via", ok = report.ok)
                     "${pc.name}에 WOL 신호를 보냈습니다$suffix"
                 } else {
                     AgentClient.command(pc, power).fold(

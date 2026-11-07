@@ -67,8 +67,27 @@ object WakeOnLan {
         if (host != null && remote == null) "DDNS 주소 확인 실패 · 같은 Wi-Fi로만 보냄" else null
     }
 
+    /** What a wake attempt did, for the activity log: [note] is shown in brackets, red unless [ok]. */
+    data class Report(val note: String?, val ok: Boolean)
+
+    /**
+     * Magic packets (LAN broadcast + DDNS) and, if set up, the ipTIME router's own WOL, which also
+     * works when the router has forgotten the switched-off PC (see [IptimeRouter]).
+     * Throws only when nothing at all could be sent.
+     */
+    suspend fun wake(context: Context, pc: Pc, useRouter: Boolean = true): Report {
+        val packets = runCatching { send(context, pc) }
+        if (!useRouter || !pc.routerWol) return Report(packets.getOrThrow(), ok = packets.getOrNull() == null)
+        val router = runCatching { IptimeRouter.wake(context, pc) }
+        return when {
+            router.isSuccess -> Report("공유기 WOL 포함", ok = true)
+            packets.isFailure -> throw IOException("공유기 WOL 실패: ${router.exceptionOrNull()?.message}")
+            else -> Report("공유기 WOL 실패: ${router.exceptionOrNull()?.message}", ok = false)
+        }
+    }
+
     /** Resolves the DDNS name with a few retries, falling back to the last address it gave. */
-    private suspend fun resolve(context: Context, host: String): InetAddress? {
+    suspend fun resolve(context: Context, host: String): InetAddress? {
         val cache = context.getSharedPreferences("wol_dns_cache", Context.MODE_PRIVATE)
         repeat(3) { attempt ->
             try {
