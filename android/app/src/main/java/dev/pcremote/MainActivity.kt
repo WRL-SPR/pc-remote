@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,10 +37,12 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -52,6 +55,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -114,6 +118,8 @@ fun PcRemoteApp(store: PcStore) {
     var editorOpen by remember { mutableStateOf(false) }
     var editorTarget by remember { mutableStateOf<Pc?>(null) }
     var pendingAction by remember { mutableStateOf<Pair<Pc, PowerAction>?>(null) }
+    var defaultId by remember { mutableStateOf(store.defaultPc(pcs)?.id) }
+    var settingsOpen by remember { mutableStateOf(false) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     fun notify(message: String) {
@@ -191,8 +197,10 @@ fun PcRemoteApp(store: PcStore) {
         pcs = pcs,
         states = states,
         busy = busy,
+        defaultId = defaultId,
         snackbar = snackbar,
         onAdd = { editorTarget = null; editorOpen = true },
+        onSettings = { settingsOpen = true },
         onWake = { wake(it) },
         onStream = { openArtemis() },
         onPower = { pc, action -> pendingAction = pc to action },
@@ -202,17 +210,28 @@ fun PcRemoteApp(store: PcStore) {
     if (editorOpen) {
         PcEditorDialog(
             initial = editorTarget,
+            isDefault = editorTarget == null && pcs.isEmpty() || editorTarget?.id == defaultId,
             onDismiss = { editorOpen = false },
-            onSave = { pc ->
+            onSave = { pc, makeDefault ->
                 pcs = if (pcs.any { it.id == pc.id }) pcs.map { if (it.id == pc.id) pc else it } else pcs + pc
                 store.save(pcs)
+                if (makeDefault) store.defaultId = pc.id
+                defaultId = store.defaultPc(pcs)?.id
                 editorOpen = false
             },
             onDelete = { pc ->
                 pcs = pcs.filter { it.id != pc.id }
                 store.save(pcs)
+                defaultId = store.defaultPc(pcs)?.id
                 editorOpen = false
             },
+        )
+    }
+
+    if (settingsOpen) {
+        QuickActionsDialog(
+            defaultPc = pcs.firstOrNull { it.id == defaultId },
+            onDismiss = { settingsOpen = false },
         )
     }
 
@@ -251,8 +270,10 @@ fun PcRemoteScreen(
     pcs: List<Pc>,
     states: Map<String, PcState>,
     busy: Map<String, String>,
+    defaultId: String?,
     snackbar: SnackbarHostState,
     onAdd: () -> Unit,
+    onSettings: () -> Unit,
     onWake: (Pc) -> Unit,
     onStream: () -> Unit,
     onPower: (Pc, PowerAction) -> Unit,
@@ -273,6 +294,15 @@ fun PcRemoteScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onSettings) {
+                        Icon(
+                            Icons.Outlined.Settings,
+                            contentDescription = "빅스비 · 루틴 연동",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -323,6 +353,7 @@ fun PcRemoteScreen(
                         pc = pc,
                         state = states[pc.id],
                         busy = busy[pc.id],
+                        isDefault = pcs.size > 1 && pc.id == defaultId,
                         onWake = { onWake(pc) },
                         onStream = onStream,
                         onPower = { onPower(pc, it) },
@@ -382,6 +413,7 @@ fun PcCard(
     pc: Pc,
     state: PcState?,
     busy: String?,
+    isDefault: Boolean,
     onWake: () -> Unit,
     onStream: () -> Unit,
     onPower: (PowerAction) -> Unit,
@@ -420,13 +452,27 @@ fun PcCard(
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            pc.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                pc.name,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            if (isDefault) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "기본",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier
+                                        .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(6.dp))
+                                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                                )
+                            }
+                        }
                         Text(
                             pc.host,
                             style = MaterialTheme.typography.labelMedium,
@@ -580,10 +626,12 @@ private fun PowerTile(
 @Composable
 fun PcEditorDialog(
     initial: Pc?,
+    isDefault: Boolean,
     onDismiss: () -> Unit,
-    onSave: (Pc) -> Unit,
+    onSave: (Pc, Boolean) -> Unit,
     onDelete: (Pc) -> Unit,
 ) {
+    var makeDefault by remember { mutableStateOf(isDefault) }
     var name by remember { mutableStateOf(initial?.name ?: "") }
     var host by remember { mutableStateOf(initial?.host ?: "") }
     var mac by remember { mutableStateOf(initial?.mac ?: "") }
@@ -615,6 +663,14 @@ fun PcEditorDialog(
                     "ipTIME DDNS 주소 (예: myhome.iptime.org)", KeyboardType.Uri,
                 ) { wolTarget = it }
                 Field("WOL 포트", wolPort, "공유기에서 포워딩한 UDP 포트", KeyboardType.Number) { wolPort = it }
+                Section("빅스비 · 루틴")
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { makeDefault = !makeDefault },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(checked = makeDefault, onCheckedChange = { makeDefault = it })
+                    Text("빅스비·루틴·바로가기가 이 PC를 제어", style = MaterialTheme.typography.bodyMedium)
+                }
                 errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 if (initial != null) {
                     TextButton(onClick = { onDelete(initial) }) {
@@ -646,12 +702,96 @@ fun PcEditorDialog(
                             agentPort = ap!!,
                             wolTarget = wolTarget.trim(),
                             wolPort = wp!!,
-                        )
+                        ),
+                        makeDefault,
                     )
                 }
             }) { Text("저장", fontWeight = FontWeight.SemiBold) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
+    )
+}
+
+val QuickAction.icon: ImageVector
+    get() = power?.icon ?: AppIcons.Power
+
+/** Turns the Routines / Bixby app-list entries on or off and explains how to use them. */
+@Composable
+fun QuickActionsDialog(defaultPc: Pc?, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val inAppList = remember {
+        mutableStateMapOf<QuickAction, Boolean>().apply {
+            QuickAction.entries.forEach { put(it, QuickActions.isInAppList(context, it)) }
+        }
+    }
+    fun toggle(action: QuickAction, on: Boolean) {
+        QuickActions.setInAppList(context, action, on)
+        inAppList[action] = on
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+        title = { Text("빅스비 · 루틴 연동") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "켠 동작은 앱 목록에 별도 아이콘으로 추가됩니다. 열면 화면 없이 바로 실행됩니다.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                QuickAction.entries.forEach { action ->
+                    val on = inAppList[action] == true
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { toggle(action, !on) }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val danger = action == QuickAction.SHUTDOWN
+                        Box(
+                            Modifier.size(34.dp).background(
+                                if (danger) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                RoundedCornerShape(10.dp),
+                            ),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                action.icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (danger) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Text(action.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                        Switch(checked = on, onCheckedChange = { toggle(action, it) })
+                    }
+                }
+                Section("대상 PC")
+                Text(
+                    defaultPc?.name ?: "등록된 PC가 없습니다",
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "PC가 여러 대라면 PC 편집 화면에서 바꿀 수 있습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Section("사용 방법")
+                Text(
+                    "• 모드 및 루틴: 실행할 동작 → 앱 → 앱 열기 → \"PC 끄기\" 등 선택\n" +
+                        "• 빅스비: \"하이 빅스비, PC 끄기 열어줘\"\n" +
+                        "• 앱 아이콘을 길게 누르면 켜기·절전·재시작·끄기 바로가기",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기", fontWeight = FontWeight.SemiBold) } },
     )
 }
 

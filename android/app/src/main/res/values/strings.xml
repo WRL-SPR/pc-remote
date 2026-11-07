@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">PC 리모트</string>
+    <string name="action_wake">PC 켜기</string>
+    <string name="action_sleep">PC 절전</string>
+    <string name="action_hibernate">PC 최대 절전</string>
+    <string name="action_restart">PC 재시작</string>
+    <string name="action_shutdown">PC 끄기</string>
 </resources>

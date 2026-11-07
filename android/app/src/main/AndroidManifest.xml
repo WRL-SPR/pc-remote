@@ -31,6 +31,81 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+
+        <!-- Runs a power action without UI. Reached through the aliases below and app shortcuts. -->
+        <activity
+            android:name=".ActionActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
+
+        <!-- One app-list entry per action, off by default and switched on from the app's settings,
+             so Modes & Routines ("앱 열기") and Bixby ("PC 끄기 열어줘") can start them. -->
+        <activity-alias
+            android:name=".action.Wake"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_action_wake"
+            android:label="@string/action_wake"
+            android:targetActivity=".ActionActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".action.Sleep"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_action_sleep"
+            android:label="@string/action_sleep"
+            android:targetActivity=".ActionActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".action.Hibernate"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_action_hibernate"
+            android:label="@string/action_hibernate"
+            android:targetActivity=".ActionActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".action.Restart"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_action_restart"
+            android:label="@string/action_restart"
+            android:targetActivity=".ActionActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".action.Shutdown"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_action_shutdown"
+            android:label="@string/action_shutdown"
+            android:targetActivity=".ActionActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
     </application>
 </manifest>

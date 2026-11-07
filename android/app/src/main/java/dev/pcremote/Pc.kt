@@ -30,6 +30,13 @@ class PcStore(context: Context) {
         prefs.edit().putString("list", JSONArray(list.map { it.toJson() }).toString()).apply()
     }
 
+    /** The PC that Routines / Bixby / app-shortcut actions control. */
+    var defaultId: String?
+        get() = prefs.getString("defaultId", null)
+        set(value) = prefs.edit().putString("defaultId", value).apply()
+
+    fun defaultPc(list: List<Pc> = load()): Pc? = list.firstOrNull { it.id == defaultId } ?: list.firstOrNull()
+
     private fun Pc.toJson() = JSONObject()
         .put("id", id)
         .put("name", name)

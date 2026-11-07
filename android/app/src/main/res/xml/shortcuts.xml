@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press app icon shortcuts; can also be dragged to the home screen. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_action_wake"
+        android:shortcutId="wake"
+        android:shortcutLongLabel="@string/action_wake"
+        android:shortcutShortLabel="@string/action_wake">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="pcremote://action/wake"
+            android:targetClass="dev.pcremote.ActionActivity"
+            android:targetPackage="dev.pcremote" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_action_sleep"
+        android:shortcutId="sleep"
+        android:shortcutLongLabel="@string/action_sleep"
+        android:shortcutShortLabel="@string/action_sleep">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="pcremote://action/sleep"
+            android:targetClass="dev.pcremote.ActionActivity"
+            android:targetPackage="dev.pcremote" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_action_restart"
+        android:shortcutId="restart"
+        android:shortcutLongLabel="@string/action_restart"
+        android:shortcutShortLabel="@string/action_restart">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="pcremote://action/restart"
+            android:targetClass="dev.pcremote.ActionActivity"
+            android:targetPackage="dev.pcremote" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_action_shutdown"
+        android:shortcutId="shutdown"
+        android:shortcutLongLabel="@string/action_shutdown"
+        android:shortcutShortLabel="@string/action_shutdown">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="pcremote://action/shutdown"
+            android:targetClass="dev.pcremote.ActionActivity"
+            android:targetPackage="dev.pcremote" />
+    </shortcut>
+</shortcuts>
