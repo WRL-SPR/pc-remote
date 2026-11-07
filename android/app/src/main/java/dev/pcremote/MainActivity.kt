@@ -194,8 +194,8 @@ fun PcRemoteApp(store: PcStore) {
             busy[pc.id] = "WOL 신호 보내는 중…"
             store.setQuiet(pc.id, 0)
             try {
-                WakeOnLan.send(context, pc)
-                log(pc, "전원 켜기 신호 보냄")
+                val note = WakeOnLan.send(context, pc)
+                log(pc, "전원 켜기 신호 보냄" + (note?.let { " ($it)" } ?: ""), ok = note == null)
                 if (pc.routerEnabled) launch {
                     RouterWol.send(store, pc)
                         .onSuccess { log(pc, "공유기에 켜기 요청 보냄"); pcs = store.load() }
@@ -221,7 +221,8 @@ fun PcRemoteApp(store: PcStore) {
                     }
                     busy[pc.id] = if (state.agent) "윈도우 켜짐 · Apollo 대기 ${sec}초" else "켜는 중… ${sec}초"
                     if (!state.agent && now - lastSend > 10_000) {
-                        WakeOnLan.send(context, pc)
+                        // A failed resend must not end the boot tracking; the next one retries.
+                        runCatching { WakeOnLan.send(context, pc) }
                         lastSend = now
                     }
                     delay(2_000)

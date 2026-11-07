@@ -186,6 +186,9 @@ PC가 여러 대면 PC 편집 화면의 **"빅스비·루틴·바로가기가 �
 - 내려받은 파일은 릴리스의 `latest.json`에 적힌 SHA-256과 비교해서, 다르면 설치하지 않습니다. 앱 업데이트는 같은 서명 키로 서명된 경우에만 Android가 설치를 허용합니다.
 
 ### 릴리스 만드는 법 (관리자)
+**앱만 바뀐 경우:** `versionCode`·`versionName`을 올려 main에 머지한 뒤, GitHub → Actions → **Release** → Run workflow에 업데이트 내역을 적고 실행합니다. 서명된 APK를 빌드하고, 에이전트 설치 파일은 최신 릴리스에서 그대로 가져와 `latest.json`과 함께 릴리스를 만듭니다.
+
+**에이전트도 바뀐 경우** (설치 프로그램은 Windows에서 빌드해야 함):
 1. 앱(`versionCode`, `versionName`)과 설치 프로그램(`AppVersion`) 버전을 올리고 빌드합니다.
 2. 업데이트 내역을 텍스트 파일로 쓰고 `latest.json`을 만듭니다.
    ```bash

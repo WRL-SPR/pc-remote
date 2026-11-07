@@ -60,12 +60,13 @@ object QuickActions {
                 val power = action.power
                 if (power == null) {
                     store.setQuiet(pc.id, 0)
-                    WakeOnLan.send(context, pc)
-                    activity.add(pc.id, "전원 켜기 신호 보냄$via")
+                    val note = WakeOnLan.send(context, pc)
+                    val suffix = note?.let { " ($it)" } ?: ""
+                    activity.add(pc.id, "전원 켜기 신호 보냄$suffix$via", ok = note == null)
                     if (pc.routerEnabled) RouterWol.send(store, pc)
                         .onSuccess { activity.add(pc.id, "공유기에 켜기 요청 보냄$via") }
                         .onFailure { activity.add(pc.id, "공유기 켜기 요청 실패: ${it.message}$via", ok = false) }
-                    "${pc.name}에 WOL 신호를 보냈습니다"
+                    "${pc.name}에 WOL 신호를 보냈습니다$suffix"
                 } else {
                     AgentClient.command(pc, power).fold(
                         onSuccess = { route ->
