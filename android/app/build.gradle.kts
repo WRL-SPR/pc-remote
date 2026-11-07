@@ -1,8 +1,20 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("app.cash.paparazzi")
+}
+
+// Release signing key lives outside the repository (default: ~/.pcremote/keystore.properties,
+// or the path in the PCREMOTE_KEYSTORE_PROPERTIES environment variable). Without it, release
+// builds are left unsigned; debug builds always work.
+val keystoreProperties = Properties().apply {
+    val path = System.getenv("PCREMOTE_KEYSTORE_PROPERTIES")
+        ?: "${System.getProperty("user.home")}/.pcremote/keystore.properties"
+    val file = file(path)
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -13,13 +25,25 @@ android {
         applicationId = "dev.pcremote"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.3"
+        versionCode = 4
+        versionName = "1.3.1"
+    }
+
+    signingConfigs {
+        if (keystoreProperties.containsKey("storeFile")) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {

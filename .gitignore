@@ -6,3 +6,7 @@ local.properties
 captures/
 *.apk
 dist/
+# signing keys must never be committed
+*.jks
+*.keystore
+keystore.properties

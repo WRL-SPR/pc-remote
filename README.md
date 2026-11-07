@@ -100,6 +100,19 @@ Artemis는 PC에 설치된 [Apollo](https://github.com/ClassicOldSong/Apollo) �
 
 ## 3. 앱 빌드·설치
 
+릴리스 페이지의 `PcRemote.apk`는 **출시용 서명 키**로 서명되어 있습니다. 앞으로 나오는 버전도 같은 키로 서명하므로 기존 앱 위에 덮어 설치하면 됩니다.
+- v1.3 이하(개발용 키)에서 v1.3.1 이상으로 넘어갈 때만 **한 번** 앱을 지우고 새로 설치해야 합니다. 지우면 등록한 PC가 사라지니, PC의 "연결 정보 보기"를 보며 다시 추가하세요.
+- 아래 방법 A·B로 직접 빌드한 디버그 APK는 서명 키가 달라서 릴리스 APK 위에 덮어 설치할 수 없습니다.
+
+### 출시용 APK 빌드 (서명 키 보관자)
+서명 키는 저장소 밖 `%USERPROFILE%\.pcremote\`에 있습니다(`pcremote-release.jks`, `keystore.properties`). 이 폴더가 있으면 아래 명령이 서명된 APK를 만듭니다.
+```bash
+gradle assembleRelease
+```
+결과물: `android/app/build/outputs/apk/release/app-release.apk`
+
+> ⚠️ **`.pcremote` 폴더 전체를 USB나 개인 클라우드에 백업하세요.** 이 키를 잃으면 이후 버전을 기존 앱 위에 설치할 수 없습니다. 이 폴더는 절대 GitHub에 올리지 마세요(`.gitignore`로 막아 두었습니다). 다른 위치의 키를 쓰려면 환경 변수 `PCREMOTE_KEYSTORE_PROPERTIES`에 `keystore.properties` 경로를 지정합니다.
+
 ### 방법 A: Android Studio
 1. Android Studio에서 `android` 폴더를 엽니다. Gradle 동기화는 자동으로 진행됩니다.
 2. 갤럭시에서 `설정 → 휴대전화 정보 → 소프트웨어 정보 → 빌드번호`를 7번 눌러 개발자 모드를 켭니다.
