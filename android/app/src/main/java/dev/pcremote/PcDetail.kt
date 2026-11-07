@@ -396,6 +396,7 @@ private fun InfoCard(pc: Pc, state: PcState?, isDefault: Boolean, latestAgentVer
         InfoRow("DDNS", pc.wolTarget.ifBlank { null })
         InfoRow("WOL 외부 포트", if (outsideSet) "UDP ${pc.wolPort}" else null)
         InfoRow("에이전트 외부 포트", pc.remoteAgentPort.takeIf { it > 0 && outsideSet }?.let { "TCP $it" })
+        if (pc.routerWol) InfoRow("공유기로 켜기", "원격 관리 ${pc.routerPort}", mono = false)
         InfoRow(
             "현재 연결",
             when {

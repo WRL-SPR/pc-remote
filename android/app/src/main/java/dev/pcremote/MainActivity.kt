@@ -80,6 +80,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -190,10 +192,11 @@ fun PcRemoteApp(store: PcStore) {
             busy[pc.id] = "WOL 신호 보내는 중…"
             store.setQuiet(pc.id, 0)
             try {
-                val note = WakeOnLan.send(context, pc)
-                log(pc, "전원 켜기 신호 보냄" + (note?.let { " ($it)" } ?: ""), ok = note == null)
+                val report = WakeOnLan.wake(context, pc)
+                log(pc, "전원 켜기 신호 보냄" + (report.note?.let { " ($it)" } ?: ""), ok = report.ok)
                 val start = System.currentTimeMillis()
                 var lastSend = start
+                var routerRetried = false
                 while (true) {
                     val state = PcStatus.check(pc)
                     states[pc.id] = state
@@ -213,7 +216,10 @@ fun PcRemoteApp(store: PcStore) {
                     busy[pc.id] = if (state.agent) "윈도우 켜짐 · Apollo 대기 ${sec}초" else "켜는 중… ${sec}초"
                     if (!state.agent && now - lastSend > 10_000) {
                         // A failed resend must not end the boot tracking; the next one retries.
-                        runCatching { WakeOnLan.send(context, pc) }
+                        // The router's WOL is asked again only once, after a minute.
+                        val askRouter = !routerRetried && sec >= 60
+                        if (askRouter) routerRetried = true
+                        runCatching { WakeOnLan.wake(context, pc, useRouter = askRouter) }
                         lastSend = now
                     }
                     delay(2_000)
@@ -743,6 +749,11 @@ fun PcEditorDialog(
     var remoteAgentPort by remember {
         mutableStateOf(initial?.remoteAgentPort?.takeIf { it > 0 }?.toString() ?: "")
     }
+    var routerPort by remember {
+        mutableStateOf(initial?.routerPort?.takeIf { it > 0 }?.toString() ?: "")
+    }
+    var routerUser by remember { mutableStateOf(initial?.routerUser ?: "") }
+    var routerPassword by remember { mutableStateOf(initial?.routerPassword ?: "") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
@@ -775,6 +786,24 @@ fun PcEditorDialog(
                     "공유기 포트포워딩: TCP 이 포트 → PC 내부 ${agentPort.trim().ifEmpty { "9876" }} · 비우면 사용 안 함",
                     KeyboardType.Number,
                 ) { remoteAgentPort = it }
+                Section("공유기로 켜기 (선택)")
+                Text(
+                    "PC를 끄고 몇 분 지나면 공유기가 밖에서 온 WOL을 PC로 넘기지 못합니다. " +
+                        "여기에 ipTIME 원격 관리 정보를 넣으면 켤 때 공유기의 WOL 기능도 함께 실행합니다. " +
+                        "공유기 WOL 목록에 이 PC가 등록돼 있어야 합니다(펌웨어 15 이상).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Field(
+                    "원격 관리 포트", routerPort,
+                    "관리 → 보안 기능 → 공유기 접속 관리 · 비우면 사용 안 함", KeyboardType.Number,
+                ) { routerPort = it }
+                Field("관리자 아이디", routerUser) { routerUser = it }
+                Field(
+                    "관리자 비밀번호", routerPassword,
+                    "휴대폰 안에만 암호화해 저장 · 공유기로는 암호화 없이(HTTP) 전송",
+                    KeyboardType.Password, password = true,
+                ) { routerPassword = it }
                 Section("빅스비 · 루틴")
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { makeDefault = !makeDefault },
@@ -796,6 +825,7 @@ fun PcEditorDialog(
                 val ap = agentPort.trim().toIntOrNull()
                 val wp = wolPort.trim().toIntOrNull()
                 val rp = if (remoteAgentPort.isBlank()) 0 else remoteAgentPort.trim().toIntOrNull()
+                val routerP = if (routerPort.isBlank()) 0 else routerPort.trim().toIntOrNull()
                 errorMsg = when {
                     name.isBlank() -> "이름을 입력하세요"
                     host.isBlank() -> "PC IP 주소를 입력하세요"
@@ -805,6 +835,10 @@ fun PcEditorDialog(
                     wp == null || wp !in 1..65535 -> "WOL 외부 포트가 올바르지 않습니다"
                     rp == null || rp !in 0..65535 -> "에이전트 외부 포트가 올바르지 않습니다"
                     rp > 0 && wolTarget.isBlank() -> "에이전트 외부 포트를 쓰려면 DDNS 주소를 입력하세요"
+                    routerP == null || routerP !in 0..65535 -> "원격 관리 포트가 올바르지 않습니다"
+                    routerP > 0 && wolTarget.isBlank() -> "공유기로 켜려면 DDNS 주소를 입력하세요"
+                    routerP > 0 && (routerUser.isBlank() || routerPassword.isEmpty()) ->
+                        "공유기 관리자 아이디와 비밀번호를 입력하세요"
                     else -> null
                 }
                 if (errorMsg == null) {
@@ -819,6 +853,9 @@ fun PcEditorDialog(
                             wolTarget = wolTarget.trim(),
                             wolPort = wp!!,
                             remoteAgentPort = rp!!,
+                            routerPort = routerP!!,
+                            routerUser = if ((routerP ?: 0) > 0) routerUser.trim() else "",
+                            routerPassword = if ((routerP ?: 0) > 0) routerPassword else "",
                         ),
                         makeDefault,
                     )
@@ -951,6 +988,7 @@ private fun Field(
     value: String,
     supporting: String? = null,
     keyboard: KeyboardType = KeyboardType.Text,
+    password: Boolean = false,
     onChange: (String) -> Unit,
 ) {
     OutlinedTextField(
@@ -961,6 +999,7 @@ private fun Field(
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
         keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         modifier = Modifier.fillMaxWidth(),
     )
 }
