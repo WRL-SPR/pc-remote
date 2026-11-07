@@ -1,0 +1,140 @@
+name: Release
+
+# Publishes a GitHub release from main: the signed app APK, the PC agent installer and latest.json,
+# which the phone app and the PC tray read to find updates.
+# Run it from Actions → Release → Run workflow after bumping versionCode/versionName.
+#
+# The agent installer is built on Windows (Inno Setup), so it is not built here: the installer for
+# the agent version in PcRemoteAgent.iss is copied from the current latest release. When the agent
+# version changes, publish that release by hand as before (README §6).
+
+on:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "업데이트 내역 (앱·트레이의 업데이트 창과 릴리스 본문에 그대로 나옴)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read versions
+        id: v
+        run: |
+          app=$(sed -nE 's/.*versionName = "([^"]+)".*/\1/p' android/app/build.gradle.kts)
+          code=$(sed -nE 's/.*versionCode = ([0-9]+).*/\1/p' android/app/build.gradle.kts)
+          agent=$(sed -nE 's/^#define AppVersion "([^"]+)".*/\1/p' pc-agent/installer/PcRemoteAgent.iss)
+          echo "app=$app code=$code agent=$agent"
+          [ -n "$app" ] && [ -n "$code" ] && [ -n "$agent" ] || { echo "::error::버전을 읽지 못했습니다"; exit 1; }
+          if gh release view "v$app" >/dev/null 2>&1; then
+            echo "::error::v$app 릴리스가 이미 있습니다. versionCode/versionName을 먼저 올리세요."; exit 1
+          fi
+          latest_code=$(gh release download --pattern latest.json --output - 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["app"]["versionCode"])' || echo 0)
+          if [ "$code" -le "$latest_code" ]; then
+            echo "::error::versionCode $code가 최신 릴리스($latest_code)보다 크지 않습니다."; exit 1
+          fi
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "agent=$agent" >> "$GITHUB_OUTPUT"
+
+      - name: Agent installer from the latest release
+        run: |
+          mkdir -p dist
+          file="PcRemoteAgent-Setup-${{ steps.v.outputs.agent }}.exe"
+          gh release download --pattern "$file" --dir dist || {
+            echo "::error::최신 릴리스에 $file 이 없습니다. 에이전트 버전이 바뀌었다면 Windows에서 빌드해 직접 릴리스하세요."; exit 1; }
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Restore signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          [ -n "$KEYSTORE_BASE64" ] || { echo "::error::서명 키 Secrets가 없습니다"; exit 1; }
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+          } > "$RUNNER_TEMP/keystore.properties"
+
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          PCREMOTE_KEYSTORE_PROPERTIES: ${{ runner.temp }}/keystore.properties
+        run: gradle assembleRelease
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/keystore.properties"
+
+      # Must match the key of the installed app, or Android refuses the update.
+      - name: Check signing certificate
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk dist/PcRemote.apk
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs dist/PcRemote.apk | tee certs.txt
+          grep -qi "af2c79c4076ce959edd1a301c731db299a38888d6ba7fd8022b077c10ce4cb98" certs.txt
+
+      - name: Write latest.json
+        env:
+          NOTES: ${{ inputs.notes }}
+          APP: ${{ steps.v.outputs.app }}
+          CODE: ${{ steps.v.outputs.code }}
+          AGENT: ${{ steps.v.outputs.agent }}
+        run: |
+          python3 - <<'PY'
+          import datetime, hashlib, json, os
+          def info(path):
+              data = open(path, "rb").read()
+              return len(data), hashlib.sha256(data).hexdigest()
+          agent_file = f"PcRemoteAgent-Setup-{os.environ['AGENT']}.exe"
+          app_size, app_sha = info("dist/PcRemote.apk")
+          agent_size, agent_sha = info(f"dist/{agent_file}")
+          notes = os.environ["NOTES"].replace("\r\n", "\n").strip()
+          manifest = {
+              "app": {"version": os.environ["APP"], "versionCode": int(os.environ["CODE"]),
+                      "file": "PcRemote.apk", "size": app_size, "sha256": app_sha},
+              "agent": {"version": os.environ["AGENT"], "file": agent_file,
+                        "size": agent_size, "sha256": agent_sha},
+              "notes": notes,
+              "published": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y-%m-%d"),
+          }
+          with open("dist/latest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+          with open("dist/notes.md", "w", encoding="utf-8") as f:
+              f.write(notes + "\n\n`latest.json`은 앱과 트레이가 새 버전을 확인할 때 읽는 파일입니다.\n")
+          PY
+          cat dist/latest.json
+
+      # gh uploads the assets to a draft first and publishes at the end, so the app never sees
+      # a "latest" release without latest.json.
+      - name: Publish release
+        run: |
+          gh release create "v${{ steps.v.outputs.app }}" \
+            --target "$GITHUB_SHA" \
+            --title "PC 리모트 v${{ steps.v.outputs.app }}" \
+            --notes-file dist/notes.md \
+            dist/PcRemote.apk "dist/PcRemoteAgent-Setup-${{ steps.v.outputs.agent }}.exe" dist/latest.json
