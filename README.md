@@ -122,7 +122,10 @@ gradle assembleRelease
 `android` 폴더에서 `gradle recordPaparazziDebug`를 실행하면 바형·폴드 커버·폴드 메인 화면 크기별 스크린샷이 `app/src/test/snapshots/images/`에 생성됩니다.
 
 ### 방법 B: GitHub Actions (PC에 개발 도구 설치 불필요)
-이 폴더를 GitHub 저장소에 push하면 `.github/workflows/build-apk.yml`이 APK를 빌드합니다. 빌드가 끝나면 Actions 탭 → Artifacts에서 `app-debug.apk`를 받아 휴대폰에 설치합니다. 설치할 때 "출처를 알 수 없는 앱" 허용이 필요합니다.
+GitHub에 push하면 `.github/workflows/build-apk.yml`이 APK를 빌드합니다. 빌드가 끝나면 Actions 탭 → 해당 실행 → Artifacts의 `pc-remote-apk`를 받아 휴대폰에 설치합니다.
+- 저장소 Secrets(`Settings → Secrets and variables → Actions`)에 `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`가 있으면 **출시용 키로 서명된 `app-release.apk`**를 만듭니다. 릴리스 페이지의 APK와 같은 키라서 그대로 덮어 설치할 수 있습니다. 빌드 중에 서명 인증서 지문을 확인해서 다른 키로 서명되면 빌드를 실패시킵니다.
+- Secrets가 없으면(예: 다른 사람이 복사한 저장소) 디버그 APK(`app-debug.apk`)를 만듭니다.
+- Secrets 값은 등록한 뒤 다시 볼 수 없습니다. 키 원본은 따로 백업해 두세요.
 
 ### Artemis
 [Artemis 릴리스 페이지](https://github.com/ClassicOldSong/moonlight-android/releases)에서 APK를 설치합니다. 앱은 Artemis(`com.limelight.noir`)를 먼저 찾고, 없으면 Moonlight를 실행합니다.

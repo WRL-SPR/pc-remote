@@ -19,8 +19,56 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - run: gradle assembleDebug
+
+      # Release signing key from the repository secrets (Settings → Secrets and variables → Actions):
+      # KEYSTORE_BASE64 (the .jks file, base64), KEYSTORE_PASSWORD, KEY_ALIAS.
+      # Without them (e.g. a fork) a debug APK is built instead.
+      - name: Restore signing key
+        id: key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+          } > "$RUNNER_TEMP/keystore.properties"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build signed release APK
+        if: steps.key.outputs.available == 'true'
+        env:
+          PCREMOTE_KEYSTORE_PROPERTIES: ${{ runner.temp }}/keystore.properties
+        run: gradle assembleRelease
+
+      # Same key as the APKs on the Releases page, so CI builds install over them.
+      - name: Check signing certificate
+        if: steps.key.outputs.available == 'true'
+        run: |
+          APKSIGNER=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | tee certs.txt
+          grep -qi "af2c79c4076ce959edd1a301c731db299a38888d6ba7fd8022b077c10ce4cb98" certs.txt
+
+      - name: Build debug APK (no signing key)
+        if: steps.key.outputs.available != 'true'
+        run: gradle assembleDebug
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/keystore.properties"
+
       - uses: actions/upload-artifact@v4
         with:
           name: pc-remote-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
