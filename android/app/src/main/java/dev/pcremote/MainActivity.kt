@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
@@ -80,6 +81,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -127,6 +130,7 @@ fun PcRemoteApp(store: PcStore) {
     val appVersionCode = remember { Updates.installedVersionCode(context) }
     var latest by remember { mutableStateOf<ReleaseInfo?>(null) }
     var updateOpen by remember { mutableStateOf(false) }
+    var restartStuck by remember { mutableStateOf<Pc?>(null) }
     val appUpdate = latest?.takeIf { it.appVersionCode > appVersionCode }
     val activityStore = remember { ActivityStore(context) }
     val activities = remember {
@@ -192,6 +196,11 @@ fun PcRemoteApp(store: PcStore) {
             try {
                 WakeOnLan.send(context, pc)
                 log(pc, "전원 켜기 신호 보냄")
+                if (pc.routerEnabled) launch {
+                    RouterWol.send(store, pc)
+                        .onSuccess { log(pc, "공유기에 켜기 요청 보냄"); pcs = store.load() }
+                        .onFailure { log(pc, "공유기 켜기 요청 실패: ${it.message}", ok = false) }
+                }
                 val start = System.currentTimeMillis()
                 var lastSend = start
                 while (true) {
@@ -226,6 +235,36 @@ fun PcRemoteApp(store: PcStore) {
         }
     }
 
+    // Follows a restart: the agent has to go away and come back within 3 minutes. A PC that
+    // shut Windows down but never booted again (stuck at the hardware stage) can't be woken by
+    // WOL either, so the user is told to use the power button.
+    suspend fun followRestart(pc: Pc) {
+        val start = System.currentTimeMillis()
+        var wentDown = false
+        while (true) {
+            delay(3_000)
+            val state = PcStatus.check(pc)
+            states[pc.id] = state
+            val sec = (System.currentTimeMillis() - start) / 1000
+            if (!state.agent) wentDown = true
+            else if (wentDown) {
+                log(pc, "재시작 완료 · ${formatDuration(sec)} 걸림")
+                return
+            }
+            if (sec > 180) {
+                if (wentDown) {
+                    log(pc, "재시작 후 3분 안에 돌아오지 않음", ok = false)
+                    restartStuck = pc
+                } else {
+                    notify("${pc.name}: 재시작되지 않았습니다")
+                    log(pc, "재시작 명령 후에도 PC가 꺼지지 않음", ok = false)
+                }
+                return
+            }
+            busy[pc.id] = if (wentDown) "재시작 중… ${sec}초" else "재시작 준비 중… ${sec}초"
+        }
+    }
+
     fun runPower(pc: Pc, action: PowerAction) {
         scope.launch {
             busy[pc.id] = "${action.label} 명령 보내는 중…"
@@ -238,6 +277,7 @@ fun PcRemoteApp(store: PcStore) {
                     val outside = if (route == Route.REMOTE) " (외부 연결)" else ""
                     notify("${pc.name}: ${action.label} 명령을 보냈습니다$outside")
                     log(pc, "${action.label} 명령 보냄$outside")
+                    if (action == PowerAction.RESTART) followRestart(pc)
                 }
                 .onFailure {
                     notify("${pc.name}: ${it.message ?: "연결 실패"}")
@@ -304,6 +344,25 @@ fun PcRemoteApp(store: PcStore) {
 
     if (updateOpen) {
         latest?.let { UpdateDialog(it, appVersion, onDismiss = { updateOpen = false }) }
+    }
+
+    restartStuck?.let { pc ->
+        AlertDialog(
+            onDismissRequest = { restartStuck = null },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("${pc.name}이(가) 다시 켜지지 않았습니다", textAlign = TextAlign.Center) },
+            text = {
+                Text(
+                    "재시작 명령 후 3분이 지나도 응답이 없습니다. 윈도우는 꺼졌지만 다시 켜지는 중에 멈췄을 수 있습니다.\n\n" +
+                        "이 상태에서는 원격으로 켤 수 없으니 본체 전원 버튼을 길게 눌러 끈 뒤 다시 켜 주세요.",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = { TextButton(onClick = { restartStuck = null }) { Text("확인") } },
+            dismissButton = {
+                TextButton(onClick = { restartStuck = null; wake(pc) }) { Text("켜기 신호 보내 보기") }
+            },
+        )
     }
 
     pendingAction?.let { (pc, action) ->
@@ -742,6 +801,10 @@ fun PcEditorDialog(
     var remoteAgentPort by remember {
         mutableStateOf(initial?.remoteAgentPort?.takeIf { it > 0 }?.toString() ?: "")
     }
+    var routerPort by remember { mutableStateOf(initial?.routerPort?.takeIf { it > 0 }?.toString() ?: "") }
+    var routerId by remember { mutableStateOf(initial?.routerId ?: "") }
+    var routerPw by remember { mutableStateOf(initial?.routerPw ?: "") }
+    var routerPin by remember { mutableStateOf(initial?.routerPin ?: "") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
@@ -774,6 +837,22 @@ fun PcEditorDialog(
                     "공유기 포트포워딩: TCP 이 포트 → PC 내부 ${agentPort.trim().ifEmpty { "9876" }} · 비우면 사용 안 함",
                     KeyboardType.Number,
                 ) { remoteAgentPort = it }
+                Section("공유기로 켜기 (선택)")
+                Text(
+                    "완전히 종료한 PC는 밖에서 보낸 WOL이 공유기에서 막힙니다. ipTIME의 HTTPS 원격 관리를 켜 두면 " +
+                        "앱이 공유기에 로그인해 공유기가 직접 PC를 켜게 합니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Field(
+                    "HTTPS 원격 관리 포트", routerPort,
+                    "ipTIME 보안 기능 → 공유기 접속/보안관리 · 비우면 사용 안 함", KeyboardType.Number,
+                ) { routerPort = it; routerPin = "" }
+                Field("공유기 관리자 아이디", routerId) { routerId = it }
+                Field("공유기 관리자 비밀번호", routerPw, password = true) { routerPw = it }
+                if (routerPin.isNotEmpty()) {
+                    TextButton(onClick = { routerPin = "" }) { Text("공유기 인증서 다시 받기") }
+                }
                 Section("빅스비 · 루틴")
                 Row(
                     Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { makeDefault = !makeDefault },
@@ -795,6 +874,7 @@ fun PcEditorDialog(
                 val ap = agentPort.trim().toIntOrNull()
                 val wp = wolPort.trim().toIntOrNull()
                 val rp = if (remoteAgentPort.isBlank()) 0 else remoteAgentPort.trim().toIntOrNull()
+                val rtp = if (routerPort.isBlank()) 0 else routerPort.trim().toIntOrNull()
                 errorMsg = when {
                     name.isBlank() -> "이름을 입력하세요"
                     host.isBlank() -> "PC IP 주소를 입력하세요"
@@ -804,6 +884,9 @@ fun PcEditorDialog(
                     wp == null || wp !in 1..65535 -> "WOL 외부 포트가 올바르지 않습니다"
                     rp == null || rp !in 0..65535 -> "에이전트 외부 포트가 올바르지 않습니다"
                     rp > 0 && wolTarget.isBlank() -> "에이전트 외부 포트를 쓰려면 DDNS 주소를 입력하세요"
+                    rtp == null || rtp !in 0..65535 -> "원격 관리 포트가 올바르지 않습니다"
+                    rtp > 0 && wolTarget.isBlank() -> "공유기로 켜려면 DDNS 주소를 입력하세요"
+                    rtp > 0 && (routerId.isBlank() || routerPw.isEmpty()) -> "공유기 관리자 아이디와 비밀번호를 입력하세요"
                     else -> null
                 }
                 if (errorMsg == null) {
@@ -818,6 +901,11 @@ fun PcEditorDialog(
                             wolTarget = wolTarget.trim(),
                             wolPort = wp!!,
                             remoteAgentPort = rp!!,
+                            routerPort = rtp!!,
+                            routerId = routerId.trim(),
+                            routerPw = routerPw,
+                            // A different DDNS name may be a different router: pin its certificate afresh.
+                            routerPin = if (wolTarget.trim() == initial?.wolTarget) routerPin else "",
                         ),
                         makeDefault,
                     )
@@ -950,6 +1038,7 @@ private fun Field(
     value: String,
     supporting: String? = null,
     keyboard: KeyboardType = KeyboardType.Text,
+    password: Boolean = false,
     onChange: (String) -> Unit,
 ) {
     OutlinedTextField(
@@ -959,7 +1048,8 @@ private fun Field(
         supportingText = supporting?.let { { Text(it) } },
         singleLine = true,
         shape = RoundedCornerShape(14.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+        visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(keyboardType = if (password) KeyboardType.Password else keyboard),
         modifier = Modifier.fillMaxWidth(),
     )
 }

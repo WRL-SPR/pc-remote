@@ -19,7 +19,17 @@ data class Pc(
     val wolPort: Int = 9,
     /** External TCP port the router forwards to the agent; 0 = not used. */
     val remoteAgentPort: Int = 0,
+    /** ipTIME HTTPS remote-management port, reached through [wolTarget]; 0 = router WOL not used. */
+    val routerPort: Int = 0,
+    val routerId: String = "",
+    val routerPw: String = "",
+    /** SHA-256 of the router's self-signed certificate, pinned on first use. */
+    val routerPin: String = "",
 ) {
+    /** Router WOL is set up: wakes a fully shut down PC from outside (see [RouterWol]). */
+    val routerEnabled: Boolean
+        get() = wolTarget.isNotBlank() && routerPort in 1..65535 && routerId.isNotEmpty() && routerPw.isNotEmpty()
+
     /** DDNS host for reaching the agent from outside, if configured. */
     val remoteHost: String?
         get() = wolTarget.trim().takeIf { it.isNotEmpty() && remoteAgentPort in 1..65535 }
@@ -69,6 +79,17 @@ class PcStore(context: Context) {
         .put("wolTarget", wolTarget)
         .put("wolPort", wolPort)
         .put("remoteAgentPort", remoteAgentPort)
+        .put("routerPort", routerPort)
+        .put("routerId", routerId)
+        .put("routerPw", routerPw)
+        .put("routerPin", routerPin)
+
+    /** Keeps the router certificate seen on the first successful router WOL. */
+    fun setRouterPin(pcId: String, pin: String) {
+        val list = load()
+        if (list.none { it.id == pcId && it.routerPin != pin }) return
+        save(list.map { if (it.id == pcId) it.copy(routerPin = pin) else it })
+    }
 
     private fun JSONObject.toPc() = Pc(
         id = getString("id"),
@@ -80,5 +101,9 @@ class PcStore(context: Context) {
         wolTarget = optString("wolTarget"),
         wolPort = optInt("wolPort", 9),
         remoteAgentPort = optInt("remoteAgentPort", 0),
+        routerPort = optInt("routerPort", 0),
+        routerId = optString("routerId"),
+        routerPw = optString("routerPw"),
+        routerPin = optString("routerPin"),
     )
 }
