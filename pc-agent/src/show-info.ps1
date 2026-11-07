@@ -37,6 +37,7 @@ using System.Runtime.InteropServices;
 public static class PcRemoteDpi { [DllImport("user32.dll")] public static extern bool SetProcessDPIAware(); }
 '@
     [void][PcRemoteDpi]::SetProcessDPIAware()
+    Set-AppIdentity
     if (-not (Test-Path $AgentConfigPath)) {
         [System.Windows.Forms.MessageBox]::Show('설정 파일이 없습니다. 프로그램을 다시 설치해 주세요.', $title) | Out-Null
         return
@@ -65,8 +66,10 @@ $panelBg = [Drawing.Color]::FromArgb(245, 246, 250)
 $fontName = 'Malgun Gothic'
 $mono = New-Object Drawing.Font('Consolas', 11)
 
+$version = if ($RenderTo) { '1.2.0' } else { Get-AgentVersion }
 $form = New-Object Windows.Forms.Form
-$form.Text = $title
+$form.Text = if ($version) { "$title $version" } else { $title }
+if (Get-AppIconPath) { $form.Icon = New-Object Drawing.Icon (Get-AppIconPath) }
 $form.Font = New-Object Drawing.Font($fontName, 10)
 $form.AutoScaleDimensions = New-Object Drawing.SizeF(96, 96)
 $form.AutoScaleMode = 'Dpi'

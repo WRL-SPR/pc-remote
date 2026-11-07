@@ -123,6 +123,11 @@ fun PcRemoteApp(store: PcStore) {
     var defaultId by remember { mutableStateOf(store.defaultPc(pcs)?.id) }
     var settingsOpen by remember { mutableStateOf(false) }
     var selectedId by remember { mutableStateOf<String?>(null) }
+    val appVersion = remember { Updates.installedVersionName(context) }
+    val appVersionCode = remember { Updates.installedVersionCode(context) }
+    var latest by remember { mutableStateOf<ReleaseInfo?>(null) }
+    var updateOpen by remember { mutableStateOf(false) }
+    val appUpdate = latest?.takeIf { it.appVersionCode > appVersionCode }
     val activityStore = remember { ActivityStore(context) }
     val activities = remember {
         mutableStateMapOf<String, List<Activity>>().apply { pcs.forEach { put(it.id, activityStore.list(it.id)) } }
@@ -139,6 +144,23 @@ fun PcRemoteApp(store: PcStore) {
 
     fun openArtemis() {
         if (!Artemis.launch(context)) notify("Artemis가 설치되어 있지 않아 다운로드 페이지를 엽니다")
+    }
+
+    // New app / PC agent versions from the latest GitHub release, checked when the app opens.
+    LaunchedEffect(Unit) {
+        runCatching { Updates.fetchLatest() }.onSuccess { latest = it }
+    }
+
+    fun checkForUpdate() {
+        scope.launch {
+            runCatching { Updates.fetchLatest() }
+                .onSuccess {
+                    latest = it
+                    if (it.appVersionCode > appVersionCode) updateOpen = true
+                    else notify("최신 버전입니다 ($appVersion)")
+                }
+                .onFailure { notify("업데이트 정보를 가져오지 못했습니다") }
+        }
     }
 
     // Refresh online status every 5 seconds while the app is on screen.
@@ -232,8 +254,11 @@ fun PcRemoteApp(store: PcStore) {
         defaultId = defaultId,
         activities = activities,
         selectedId = selectedId,
+        appUpdate = appUpdate,
+        latestAgentVersion = latest?.agentVersion,
         snackbar = snackbar,
         onSelect = { selectedId = it },
+        onUpdate = { updateOpen = true },
         onAdd = { editorTarget = null; editorOpen = true },
         onSettings = { settingsOpen = true },
         onWake = { wake(it) },
@@ -269,8 +294,16 @@ fun PcRemoteApp(store: PcStore) {
     if (settingsOpen) {
         QuickActionsDialog(
             defaultPc = pcs.firstOrNull { it.id == defaultId },
+            appVersion = appVersion,
+            appUpdate = appUpdate,
+            onUpdate = { settingsOpen = false; updateOpen = true },
+            onCheckUpdate = { checkForUpdate() },
             onDismiss = { settingsOpen = false },
         )
+    }
+
+    if (updateOpen) {
+        latest?.let { UpdateDialog(it, appVersion, onDismiss = { updateOpen = false }) }
     }
 
     pendingAction?.let { (pc, action) ->
@@ -316,8 +349,11 @@ fun PcRemoteScreen(
     defaultId: String?,
     activities: Map<String, List<Activity>>,
     selectedId: String?,
+    appUpdate: ReleaseInfo?,
+    latestAgentVersion: String?,
     snackbar: SnackbarHostState,
     onSelect: (String?) -> Unit,
+    onUpdate: () -> Unit,
     onAdd: () -> Unit,
     onSettings: () -> Unit,
     onWake: (Pc) -> Unit,
@@ -379,6 +415,15 @@ fun PcRemoteScreen(
                             }
                         },
                         actions = {
+                            if (appUpdate != null) {
+                                Button(
+                                    onClick = onUpdate,
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                                    modifier = Modifier.height(34.dp),
+                                ) {
+                                    Text("업데이트 ${appUpdate.appVersion}", style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
                             IconButton(onClick = onSettings) {
                                 Icon(
                                     Icons.Outlined.Settings,
@@ -417,6 +462,7 @@ fun PcRemoteScreen(
                         busy = busy[shown.id],
                         isDefault = true,
                         showDefaultBadge = false,
+                        latestAgentVersion = latestAgentVersion,
                         activities = activities[shown.id].orEmpty(),
                         showEdit = true,
                         onWake = { onWake(shown) },
@@ -444,6 +490,7 @@ fun PcRemoteScreen(
                             busy = busy[shown.id],
                             isDefault = shown.id == defaultId,
                             showDefaultBadge = pcs.size > 1,
+                            latestAgentVersion = latestAgentVersion,
                             activities = activities[shown.id].orEmpty(),
                             showEdit = true,
                             onWake = { onWake(shown) },
@@ -460,6 +507,7 @@ fun PcRemoteScreen(
                         busy = busy[selected.id],
                         isDefault = selected.id == defaultId,
                         showDefaultBadge = pcs.size > 1,
+                        latestAgentVersion = latestAgentVersion,
                         activities = activities[selected.id].orEmpty(),
                         showEdit = false,
                         onWake = { onWake(selected) },
@@ -785,7 +833,14 @@ val QuickAction.icon: ImageVector
 
 /** Turns the Routines / Bixby app-list entries on or off and explains how to use them. */
 @Composable
-fun QuickActionsDialog(defaultPc: Pc?, onDismiss: () -> Unit) {
+fun QuickActionsDialog(
+    defaultPc: Pc?,
+    appVersion: String,
+    appUpdate: ReleaseInfo?,
+    onUpdate: () -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
     val inAppList = remember {
         mutableStateMapOf<QuickAction, Boolean>().apply {
@@ -857,6 +912,22 @@ fun QuickActionsDialog(defaultPc: Pc?, onDismiss: () -> Unit) {
                         "• 앱 아이콘을 길게 누르면 켜기·절전·재시작·끄기 바로가기",
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                Section("앱 정보")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("PC 리모트 $appVersion", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (appUpdate != null) "새 버전 ${appUpdate.appVersion}이 있습니다" else "업데이트는 GitHub 릴리스에서 받습니다",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (appUpdate != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (appUpdate != null) {
+                        Button(onClick = onUpdate) { Text("업데이트") }
+                    } else {
+                        TextButton(onClick = onCheckUpdate) { Text("업데이트 확인") }
+                    }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("닫기", fontWeight = FontWeight.SemiBold) } },

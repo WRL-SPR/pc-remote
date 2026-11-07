@@ -31,10 +31,13 @@ if (-not $RenderTo) {
     $created = $false
     $mutex = New-Object Threading.Mutex($true, 'Local\PcRemoteAgentTray', [ref]$created)
     if (-not $created) { return }   # already running in this session
+    Set-AppIdentity
 }
 
 $port = (Get-ItemProperty -Path $RegKey -Name Port -ErrorAction SilentlyContinue).Port
 if (-not $port) { $port = 9876 }
+$version = if ($RenderTo) { '1.2.0' } else { Get-AgentVersion }
+$appTitle = if ($version) { "$title $version" } else { $title }
 
 # ---------- icons ----------
 $iconPath = Join-Path $PSScriptRoot 'app.ico'
@@ -71,6 +74,11 @@ $menu = New-Object Windows.Forms.ContextMenuStrip
 $menu.Font = New-Object Drawing.Font('Malgun Gothic', 9.5)
 $menu.ShowImageMargin = $false
 
+$titleItem = New-Object Windows.Forms.ToolStripLabel($appTitle)
+$titleItem.ForeColor = [Drawing.Color]::FromArgb(94, 100, 116)
+$titleItem.Padding = New-Object Windows.Forms.Padding(4, 4, 4, 0)
+[void]$menu.Items.Add($titleItem)
+
 # A label (not a disabled item) so the status colour shows.
 $statusItem = New-Object Windows.Forms.ToolStripLabel('상태 확인 중…')
 $statusItem.Font = New-Object Drawing.Font('Malgun Gothic', 9.5, [Drawing.FontStyle]::Bold)
@@ -82,6 +90,7 @@ $infoItem = $menu.Items.Add('연결 정보 보기 (토큰 · IP · MAC)')
 $infoItem.Font = New-Object Drawing.Font('Malgun Gothic', 9.5, [Drawing.FontStyle]::Bold)
 $restartItem = $menu.Items.Add('에이전트 다시 시작')
 $logItem = $menu.Items.Add('로그 보기')
+$updateItem = $menu.Items.Add('업데이트 확인')
 [void]$menu.Items.Add((New-Object Windows.Forms.ToolStripSeparator))
 $exitItem = $menu.Items.Add('트레이 아이콘 닫기 (에이전트는 계속 실행)')
 
@@ -98,17 +107,62 @@ function Update-Status {
         $statusItem.Text = "●  실행 중 · 포트 $port"
         $statusItem.ForeColor = [Drawing.Color]::FromArgb(22, 163, 74)
         $notify.Icon = $colorIcon
-        $notify.Text = "$title · 실행 중"
+        $notify.Text = "$appTitle · 실행 중"
     } else {
         $statusItem.Text = '●  에이전트가 응답하지 않음'
         $statusItem.ForeColor = [Drawing.Color]::FromArgb(211, 47, 47)
         $notify.Icon = $grayIcon
-        $notify.Text = "$title · 멈춤"
+        $notify.Text = "$appTitle · 멈춤"
         if ($script:running -eq $true) {
             $notify.ShowBalloonTip(5000, $title, '에이전트가 응답하지 않습니다. 휴대폰에서 이 PC를 끄거나 절전시킬 수 없습니다.', 'Warning')
         }
     }
     $script:running = $now
+}
+
+# ---------- updates ----------
+$script:latest = $null
+$script:announced = $null
+
+function Show-UpdatePrompt {
+    $rel = $script:latest
+    $message = "새 버전 $($rel.agent.version)이 있습니다. (지금 $version)`n`n$($rel.notes)`n`n" +
+        "지금 설치할까요? 설치하는 동안 에이전트가 잠깐 멈추고, 끝나면 자동으로 다시 시작됩니다. 설정과 토큰은 그대로입니다."
+    $answer = [Windows.Forms.MessageBox]::Show($message, "$title 업데이트", 'YesNo', 'Information')
+    if ($answer -ne 'Yes') { return }
+    $updateItem.Text = '업데이트 내려받는 중…'
+    $updateItem.Enabled = $false
+    try {
+        Install-AgentUpdate $rel
+    } catch {
+        [Windows.Forms.MessageBox]::Show("업데이트하지 못했습니다.`n$($_.Exception.Message)", $title, 'OK', 'Warning') | Out-Null
+        $updateItem.Text = "업데이트 설치 ($($rel.agent.version))"
+        $updateItem.Enabled = $true
+    }
+}
+
+function Find-Update([bool]$manual) {
+    try {
+        $rel = Get-LatestRelease
+    } catch {
+        if ($manual) {
+            [Windows.Forms.MessageBox]::Show("업데이트 정보를 가져오지 못했습니다.`n$($_.Exception.Message)", $title) | Out-Null
+        }
+        return
+    }
+    if (Test-NewerVersion $rel.agent.version $version) {
+        $script:latest = $rel
+        $updateItem.Text = "업데이트 설치 ($($rel.agent.version))"
+        $updateItem.Font = New-Object Drawing.Font('Malgun Gothic', 9.5, [Drawing.FontStyle]::Bold)
+        if ($manual) {
+            Show-UpdatePrompt
+        } elseif ($script:announced -ne $rel.agent.version) {
+            $notify.ShowBalloonTip(8000, "$title 업데이트", "새 버전 $($rel.agent.version)이 있습니다. 트레이 아이콘을 우클릭해 설치하세요.", 'Info')
+            $script:announced = $rel.agent.version
+        }
+    } elseif ($manual) {
+        [Windows.Forms.MessageBox]::Show("최신 버전입니다. ($version)", $title) | Out-Null
+    }
 }
 
 function Open-Info {
@@ -138,6 +192,7 @@ $restartItem.Add_Click({
     Start-Sleep -Seconds 2
     Update-Status
 })
+$updateItem.Add_Click({ if ($script:latest) { Show-UpdatePrompt } else { Find-Update $true } })
 $logItem.Add_Click({
     $log = Join-Path $DataDir 'agent.log'
     if (Test-Path $log) { Start-Process notepad.exe $log }
@@ -158,7 +213,17 @@ $timer.Interval = 5000
 $timer.Add_Tick({ Update-Status })
 $timer.Start()
 
+# Look for a new version shortly after logon, then every 6 hours.
+$updateTimer = New-Object Windows.Forms.Timer
+$updateTimer.Interval = 30000
+$updateTimer.Add_Tick({
+    $updateTimer.Interval = 6 * 3600 * 1000
+    Find-Update $false
+})
+$updateTimer.Start()
+
 [Windows.Forms.Application]::Run($context)
 $timer.Stop()
+$updateTimer.Stop()
 $notify.Dispose()
 $mutex.ReleaseMutex()

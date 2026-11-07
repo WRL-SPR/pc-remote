@@ -103,8 +103,13 @@ class LayoutSnapshotTest(private val screen: Screen) {
     @Test
     fun detail() = render(
         pcs = listOf(gaming.copy(wolTarget = "myhome.iptime.org", wolPort = 10009, remoteAgentPort = 19876), study),
-        states = mapOf("1" to PcState(agent = true, stream = true), "3" to PcState(agent = false, stream = false)),
+        states = mapOf(
+            "1" to PcState(agent = true, stream = true, agentVersion = "1.1.2"),
+            "3" to PcState(agent = false, stream = false),
+        ),
         selectedId = "1",
+        appUpdate = ReleaseInfo("1.4.1", 6, "PcRemote.apk", "", "1.2.0", "예시 업데이트 내역"),
+        latestAgentVersion = "1.2.0",
     )
 
     private val now = System.currentTimeMillis()
@@ -123,6 +128,8 @@ class LayoutSnapshotTest(private val screen: Screen) {
         busy: Map<String, String> = emptyMap(),
         dark: Boolean = false,
         selectedId: String? = null,
+        appUpdate: ReleaseInfo? = null,
+        latestAgentVersion: String? = null,
     ) {
         paparazzi.snapshot {
             PcRemoteTheme(dark = dark) {
@@ -133,8 +140,11 @@ class LayoutSnapshotTest(private val screen: Screen) {
                     defaultId = "1",
                     activities = sampleActivity,
                     selectedId = selectedId,
+                    appUpdate = appUpdate,
+                    latestAgentVersion = latestAgentVersion,
                     snackbar = remember { SnackbarHostState() },
                     onSelect = {},
+                    onUpdate = {},
                     onAdd = {},
                     onSettings = {},
                     onWake = {},

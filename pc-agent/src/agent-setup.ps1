@@ -9,12 +9,14 @@
              pattern wake and NIC power saving (Realtek Power Saving Mode / Green Ethernet). The
              original values are saved first so the uninstaller can put them back.
   -NoTray    don't start the tray icon at logon.
+  -Version   installer version, recorded in HKLM\SOFTWARE\PcRemoteAgent.
 #>
 param(
     [Parameter(Mandatory)][string]$InstallDir,
     [int]$Port = 9876,
     [switch]$SetupWol,
-    [switch]$NoTray
+    [switch]$NoTray,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,6 +53,8 @@ try {
 
     New-Item -Path $RegKey -Force | Out-Null
     Set-ItemProperty -Path $RegKey -Name Port -Value $Port -Type DWord
+    # Shown in the tray / info window and reported to the phone app by /ping.
+    if ($Version) { Set-ItemProperty -Path $RegKey -Name Version -Value $Version -Type String }
 
     # Tray icon at every user's logon, elevated for administrators (so it can show the token).
     # A running tray from an earlier version is closed; the installer starts the new one.

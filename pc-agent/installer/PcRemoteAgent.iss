@@ -2,7 +2,7 @@
 ; Build: ISCC.exe PcRemoteAgent.iss  ->  ..\..\dist\PcRemoteAgent-Setup-<version>.exe
 
 #define AppName "PC 리모트 에이전트"
-#define AppVersion "1.1.2"
+#define AppVersion "1.2.0"
 #define DataDir "{commonappdata}\PcRemoteAgent"
 
 [Setup]
@@ -56,9 +56,12 @@ Source: "app.ico"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\연결 정보 보기"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\show-info.ps1"""; \
     IconFilename: "{app}\app.ico"; Comment: "휴대폰 앱에 입력할 토큰, IP, MAC 주소 보기"
-Name: "{group}\트레이 아이콘 실행"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
+; Main shortcut (starts the tray). Its AppUserModelID matches the one the scripts set, so the taskbar
+; and notifications show this name and icon instead of Windows PowerShell.
+Name: "{group}\{#AppName}"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\tray.ps1"""; \
-    IconFilename: "{app}\app.ico"; Comment: "작업 표시줄에 에이전트 상태 아이콘 표시"
+    IconFilename: "{app}\app.ico"; AppUserModelID: "WRL-SPR.PcRemoteAgent"; \
+    Comment: "작업 표시줄에 에이전트 상태 아이콘 표시 (상태, 연결 정보, 업데이트)"
 Name: "{group}\{#AppName} 제거"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\PC 리모트 연결 정보"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; \
     Parameters: "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\show-info.ps1"""; \
@@ -123,7 +126,8 @@ begin
     WizardForm.StatusLabel.Caption := '에이전트를 설정하는 중...';
     Params := '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\agent-setup.ps1') + '"' +
       ' -InstallDir "' + ExpandConstant('{app}') + '"' +
-      ' -Port ' + IntToStr(StrToIntDef(Trim(PortPage.Values[0]), 9876));
+      ' -Port ' + IntToStr(StrToIntDef(Trim(PortPage.Values[0]), 9876)) +
+      ' -Version {#AppVersion}';
     if WizardIsTaskSelected('wol') then
       Params := Params + ' -SetupWol';
     if not WizardIsTaskSelected('tray') then

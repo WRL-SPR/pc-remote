@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
@@ -33,17 +34,20 @@ private const val REMOTE_TIMEOUT_MS = 3500
 object AgentClient {
     private val random = SecureRandom()
 
-    suspend fun ping(host: String, port: Int, timeoutMs: Int): Boolean = withContext(Dispatchers.IO) {
+    /** Agent's installed version if it answers ("" for agents older than 1.2.0), null if it doesn't. */
+    suspend fun ping(host: String, port: Int, timeoutMs: Int): String? = withContext(Dispatchers.IO) {
         runCatching {
             val conn = URL("http://$host:$port/ping").openConnection() as HttpURLConnection
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs
             try {
-                conn.responseCode == 200
+                if (conn.responseCode != 200) return@runCatching null
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                runCatching { JSONObject(body).optString("version") }.getOrDefault("")
             } finally {
                 conn.disconnect()
             }
-        }.getOrDefault(false)
+        }.getOrNull()
     }
 
     /**
@@ -113,8 +117,14 @@ object AgentClient {
  * [agent]: Windows has booted and PcAgent answers (power commands available).
  * [stream]: Apollo/Sunshine answers on 47989, so Artemis can connect.
  * [route]: whether the answer came over the LAN or through the DDNS name.
+ * [agentVersion]: installed PC agent version ("" = older than 1.2.0), known while [agent] is true.
  */
-data class PcState(val agent: Boolean, val stream: Boolean, val route: Route = Route.LOCAL) {
+data class PcState(
+    val agent: Boolean,
+    val stream: Boolean,
+    val route: Route = Route.LOCAL,
+    val agentVersion: String? = null,
+) {
     val on get() = agent || stream
 }
 
@@ -123,13 +133,15 @@ object PcStatus {
     suspend fun check(pc: Pc): PcState = coroutineScope {
         val agent = async { AgentClient.ping(pc.host, pc.agentPort, LOCAL_TIMEOUT_MS) }
         val stream = async { tcpOpen(pc.host, 47989, LOCAL_TIMEOUT_MS) }
-        val local = PcState(agent.await(), stream.await(), Route.LOCAL)
+        val localVersion = agent.await()
+        val local = PcState(localVersion != null, stream.await(), Route.LOCAL, localVersion)
         val remote = pc.remoteHost
         if (local.on || remote == null) return@coroutineScope local
 
         val remoteAgent = async { AgentClient.ping(remote, pc.remoteAgentPort, REMOTE_TIMEOUT_MS) }
         val remoteStream = async { tcpOpen(remote, 47989, REMOTE_TIMEOUT_MS) }
-        PcState(remoteAgent.await(), remoteStream.await(), Route.REMOTE)
+        val remoteVersion = remoteAgent.await()
+        PcState(remoteVersion != null, remoteStream.await(), Route.REMOTE, remoteVersion)
     }
 
     private suspend fun tcpOpen(host: String, port: Int, timeoutMs: Int): Boolean = withContext(Dispatchers.IO) {

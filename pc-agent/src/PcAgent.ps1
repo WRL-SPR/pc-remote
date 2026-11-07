@@ -2,7 +2,8 @@
   PC Remote Agent
   Tiny HTTP server that lets the Android app shut down / restart / sleep / hibernate this PC.
 
-    GET  /ping                               -> {"ok":true,"v":2}   (no auth, used for online status)
+    GET  /ping                               -> {"ok":true,"v":2,"version":"1.1.3"}
+                                                (no auth; online status and installed version for the app)
     POST /shutdown|restart|sleep|hibernate   signed request:
          X-Time: <unix seconds>  X-Nonce: <random hex>
          X-Signature: hex(HMAC-SHA256(token, "<action>\n<time>\n<nonce>"))
@@ -24,6 +25,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'agent-common.ps1')
+$agentVersion = Get-AgentVersion
 
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $port = [int]$config.port
@@ -105,7 +108,7 @@ $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add($Prefix)
 $listener.IgnoreWriteExceptions = $true   # the phone may hang up first; that's not an agent error
 $listener.Start()
-Write-Log "Listening on $Prefix (DryRun=$DryRun)"
+Write-Log "Agent $(if ($agentVersion) { $agentVersion } else { '(dev)' }) listening on $Prefix (DryRun=$DryRun)"
 
 # Status checks arrive every few seconds; log each device only now and then, so the log shows
 # whether the phone reaches this PC (and from where) without filling up.
@@ -123,7 +126,9 @@ while ($listener.IsListening) {
         $name = $path.TrimStart('/')
 
         if ($request.HttpMethod -eq 'GET' -and $path -eq '/ping') {
-            Send-Json $response 200 @{ ok = $true; v = 2 }
+            $pong = @{ ok = $true; v = 2 }
+            if ($agentVersion) { $pong.version = $agentVersion }
+            Send-Json $response 200 $pong
             $last = $lastPingLog[$remote]
             if (-not $last -or ((Get-Date) - $last).TotalMinutes -ge 30) {
                 Write-Log "$remote status check (logged at most every 30 min per device)"

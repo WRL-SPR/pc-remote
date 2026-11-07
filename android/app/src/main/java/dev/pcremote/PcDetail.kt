@@ -261,6 +261,7 @@ fun PcDetailPane(
     busy: String?,
     isDefault: Boolean,
     showDefaultBadge: Boolean,
+    latestAgentVersion: String?,
     activities: List<Activity>,
     showEdit: Boolean,
     onWake: () -> Unit,
@@ -339,11 +340,11 @@ fun PcDetailPane(
 
             if (twoColumns) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    InfoCard(pc, state, isDefault, Modifier.weight(1f))
+                    InfoCard(pc, state, isDefault, latestAgentVersion, Modifier.weight(1f))
                     ActivityCard(activities, Modifier.weight(1f))
                 }
             } else {
-                InfoCard(pc, state, isDefault, Modifier.fillMaxWidth())
+                InfoCard(pc, state, isDefault, latestAgentVersion, Modifier.fillMaxWidth())
                 ActivityCard(activities, Modifier.fillMaxWidth())
             }
         }
@@ -366,9 +367,29 @@ private fun DetailCard(title: String, modifier: Modifier, content: @Composable C
 }
 
 @Composable
-private fun InfoCard(pc: Pc, state: PcState?, isDefault: Boolean, modifier: Modifier) {
+private fun InfoCard(pc: Pc, state: PcState?, isDefault: Boolean, latestAgentVersion: String?, modifier: Modifier) {
     val outsideSet = pc.wolTarget.isNotBlank()
     DetailCard("연결 정보", modifier) {
+        // The PC agent reports its version while it's running; older agents (< 1.2.0) don't.
+        val installed = state?.agentVersion?.takeIf { state.agent }
+        val agentUpdate = installed != null && isNewerVersion(latestAgentVersion, installed.ifEmpty { "0" })
+        InfoRow(
+            "PC 에이전트",
+            when {
+                installed == null -> "—"
+                installed.isEmpty() -> "1.1 이하"
+                else -> installed
+            } + if (agentUpdate) " → $latestAgentVersion" else "",
+            mono = false,
+            highlight = agentUpdate,
+        )
+        if (agentUpdate) {
+            Text(
+                "PC의 트레이 아이콘을 우클릭해서 업데이트를 설치하세요.",
+                style = MaterialTheme.typography.bodySmall,
+                color = StatusColors.waiting,
+            )
+        }
         InfoRow("내부 IP", pc.host)
         InfoRow("MAC 주소", pc.mac.uppercase())
         InfoRow("에이전트 포트", pc.agentPort.toString())
@@ -389,7 +410,7 @@ private fun InfoCard(pc: Pc, state: PcState?, isDefault: Boolean, modifier: Modi
 }
 
 @Composable
-private fun InfoRow(label: String, value: String?, mono: Boolean = true) {
+private fun InfoRow(label: String, value: String?, mono: Boolean = true, highlight: Boolean = false) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
             label,
@@ -401,7 +422,12 @@ private fun InfoRow(label: String, value: String?, mono: Boolean = true) {
             value ?: "설정 안 함",
             style = MaterialTheme.typography.bodyMedium,
             fontFamily = if (mono && value != null) FontFamily.Monospace else null,
-            color = if (value == null) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
+            color = when {
+                value == null -> MaterialTheme.colorScheme.outline
+                highlight -> StatusColors.waiting
+                else -> MaterialTheme.colorScheme.onSurface
+            },
+            fontWeight = if (highlight) FontWeight.SemiBold else null,
             textAlign = TextAlign.End,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
