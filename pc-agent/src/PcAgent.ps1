@@ -10,11 +10,17 @@
   The token itself never crosses the network, so the port can be forwarded from the router
   for use outside home: a captured request can't be replayed (nonce) or reused later (time window).
 
+  Served through Windows' own HTTP server (http.sys via HttpListener): it only hands over
+  complete requests, so idle connections (browser preconnects, port scanners on the forwarded
+  port) can't stall the agent and make the app's status check time out.
+
   Installed by the setup program as a SYSTEM scheduled task that starts at boot.
+  -Prefix  listener prefix override, e.g. http://localhost:19876/ for testing without admin rights.
 #>
 param(
     [string]$ConfigPath = (Join-Path $PSScriptRoot 'agent-config.json'),
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$Prefix
 )
 
 $ErrorActionPreference = 'Stop'
@@ -85,67 +91,65 @@ function Test-Signature([string]$action, $headers) {
     return $null
 }
 
-function Send-Response($stream, [int]$code, [string]$status, $obj) {
+function Send-Json($response, [int]$code, $obj) {
     $body = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Compress))
-    $head = "HTTP/1.1 $code $status`r`nContent-Type: application/json`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
-    $headBytes = [Text.Encoding]::ASCII.GetBytes($head)
-    $stream.Write($headBytes, 0, $headBytes.Length)
-    $stream.Write($body, 0, $body.Length)
-    $stream.Flush()
+    $response.StatusCode = $code
+    $response.ContentType = 'application/json'
+    $response.ContentLength64 = $body.Length
+    $response.KeepAlive = $false
+    $response.OutputStream.Write($body, 0, $body.Length)
 }
 
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $port)
+if (-not $Prefix) { $Prefix = "http://+:$port/" }
+$listener = [System.Net.HttpListener]::new()
+$listener.Prefixes.Add($Prefix)
+$listener.IgnoreWriteExceptions = $true   # the phone may hang up first; that's not an agent error
 $listener.Start()
-Write-Log "Listening on port $port (DryRun=$DryRun)"
+Write-Log "Listening on $Prefix (DryRun=$DryRun)"
 
-while ($true) {
-    $client = $listener.AcceptTcpClient()
+# Status checks arrive every few seconds; log each device only now and then, so the log shows
+# whether the phone reaches this PC (and from where) without filling up.
+$lastPingLog = @{}
+
+while ($listener.IsListening) {
+    $context = $listener.GetContext()
     $pending = $null
+    $remote = '?'
     try {
-        $client.ReceiveTimeout = 5000
-        $client.SendTimeout = 5000
-        $stream = $client.GetStream()
-        $reader = New-Object System.IO.StreamReader($stream, [Text.Encoding]::ASCII)
-        $remote = $client.Client.RemoteEndPoint.ToString()
-
-        $requestLine = $reader.ReadLine()
-        if (-not $requestLine) { continue }
-        $headers = @{}
-        while ($headers.Count -lt 50) {
-            $line = $reader.ReadLine()
-            if ([string]::IsNullOrEmpty($line)) { break }
-            $i = $line.IndexOf(':')
-            if ($i -gt 0) { $headers[$line.Substring(0, $i).Trim()] = $line.Substring($i + 1).Trim() }
-        }
-
-        $parts = $requestLine.Split(' ')
-        $method = $parts[0]
-        $path = if ($parts.Length -gt 1) { $parts[1].ToLowerInvariant() } else { '/' }
+        $request = $context.Request
+        $response = $context.Response
+        $remote = $request.RemoteEndPoint.Address.ToString()
+        $path = $request.Url.AbsolutePath.ToLowerInvariant()
         $name = $path.TrimStart('/')
 
-        if ($method -eq 'GET' -and $path -eq '/ping') {
-            Send-Response $stream 200 'OK' @{ ok = $true; v = 2 }
-        } elseif ($method -eq 'POST' -and $actions.ContainsKey($name)) {
-            $rejected = Test-Signature $name $headers
+        if ($request.HttpMethod -eq 'GET' -and $path -eq '/ping') {
+            Send-Json $response 200 @{ ok = $true; v = 2 }
+            $last = $lastPingLog[$remote]
+            if (-not $last -or ((Get-Date) - $last).TotalMinutes -ge 30) {
+                Write-Log "$remote status check (logged at most every 30 min per device)"
+                $lastPingLog[$remote] = Get-Date
+            }
+        } elseif ($request.HttpMethod -eq 'POST' -and $actions.ContainsKey($name)) {
+            $rejected = Test-Signature $name $request.Headers
             if (-not $rejected) {
-                Send-Response $stream 200 'OK' @{ ok = $true; action = $name }
+                Send-Json $response 200 @{ ok = $true; action = $name }
                 Write-Log "$remote -> $name"
                 $pending = $name
             } else {
                 Start-Sleep -Seconds 1  # slow down guessing
-                Send-Response $stream 403 'Forbidden' @{ ok = $false; error = $rejected }
+                Send-Json $response 403 @{ ok = $false; error = $rejected }
                 Write-Log "$remote rejected ($rejected) $path"
             }
         } else {
-            Send-Response $stream 404 'Not Found' @{ ok = $false; error = 'not found' }
+            Send-Json $response 404 @{ ok = $false; error = 'not found' }
         }
     } catch {
-        Write-Log "Request error: $_"
+        Write-Log "Request error from ${remote}: $_"
     } finally {
-        $client.Close()
+        try { $context.Response.Close() } catch {}
     }
 
-    # Run the action only after the response has been sent and the socket closed.
+    # Run the action only after the response has been sent.
     if ($pending) {
         if ($DryRun) {
             Write-Log "DryRun: would run '$pending'"

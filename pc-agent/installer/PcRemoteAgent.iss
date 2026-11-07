@@ -2,7 +2,7 @@
 ; Build: ISCC.exe PcRemoteAgent.iss  ->  ..\..\dist\PcRemoteAgent-Setup-<version>.exe
 
 #define AppName "PC 리모트 에이전트"
-#define AppVersion "1.1.0"
+#define AppVersion "1.1.1"
 #define DataDir "{commonappdata}\PcRemoteAgent"
 
 [Setup]
